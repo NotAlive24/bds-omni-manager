@@ -15,6 +15,189 @@ import main as bds
 
 
 class CoreTests(unittest.TestCase):
+    def _player_manager(self):
+        manager = bds.Manager.__new__(bds.Manager)
+        manager.players_lock = threading.RLock()
+        manager.online_players = {}
+        manager._player_session_generation = 7
+        manager._players_tracking_active = True
+        return manager
+
+    def test_player_disconnect_with_xuid_and_pfid_removes_online_player(self):
+        manager = self._player_manager()
+        generation = manager._player_session_generation
+        manager._track_player(
+            "[2026-11-07 10:00:00:000 INFO] Player connected: ExamplePlayer, xuid: 2535469490621656",
+            player_generation=generation,
+        )
+        self.assertEqual(manager._online_player_snapshot(), [
+            {"name": "ExamplePlayer", "xuid": "2535469490621656"}
+        ])
+
+        manager._track_player(
+            "[2026-11-07 10:05:00:000 INFO] Player disconnected: ExamplePlayer, xuid: 2535469490621656, pfid: 5bfef7ceb772454",
+            player_generation=generation,
+        )
+        self.assertEqual(manager._online_player_snapshot(), [])
+
+    def test_player_disconnect_supports_blank_xuid_and_pfid_only(self):
+        manager = self._player_manager()
+        generation = manager._player_session_generation
+        manager._track_player("Player connected: LocalPlayer, xuid: ", player_generation=generation)
+        manager._track_player(
+            "Player disconnected: LocalPlayer, xuid: , pfid: ",
+            player_generation=generation,
+        )
+        self.assertEqual(manager._online_player_snapshot(), [])
+
+        manager._track_player("Player connected: OfflinePlayer", player_generation=generation)
+        manager._track_player(
+            "Player disconnected: OfflinePlayer, pfid: device-session",
+            player_generation=generation,
+        )
+        self.assertEqual(manager._online_player_snapshot(), [])
+
+    def test_player_disconnect_falls_back_to_xuid_if_name_differs(self):
+        manager = self._player_manager()
+        generation = manager._player_session_generation
+        manager._track_player("Player connected: OldName, xuid: 42", player_generation=generation)
+        manager._track_player(
+            "Player disconnected: NewName, xuid: 42, pfid: session-1",
+            player_generation=generation,
+        )
+        self.assertEqual(manager._online_player_snapshot(), [])
+
+    def test_late_player_events_from_previous_process_are_ignored(self):
+        manager = self._player_manager()
+        manager._player_session_generation = 8
+        manager.online_players["currentplayer"] = {"name": "CurrentPlayer", "xuid": "84"}
+        manager._track_player(
+            "Player disconnected: CurrentPlayer, xuid: 84, pfid: old-session",
+            player_generation=7,
+        )
+        manager._track_player("Player connected: StalePlayer, xuid: 99", player_generation=7)
+        self.assertEqual(manager._online_player_snapshot(), [
+            {"name": "CurrentPlayer", "xuid": "84"}
+        ])
+
+    def test_historical_log_replay_does_not_rebuild_live_player_list(self):
+        manager = self._player_manager()
+        manager._players_tracking_active = False
+        manager.log_id = 0
+        manager.logs = []
+        manager.log_lock = threading.Lock()
+        manager.save_capture_active = False
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "manager.log"
+            log_path.write_text(
+                "[2026-11-06T10:00:00+00:00] [INFO] Player connected: OldPlayer, xuid: 1\n",
+                encoding="utf-8",
+            )
+            with patch.object(bds, "LOG_FILE", log_path):
+                manager._load_saved_log_tail()
+        self.assertEqual(manager._online_player_snapshot(), [])
+        self.assertEqual(len(manager.logs), 1)
+
+    def test_process_exit_clears_player_session(self):
+        class ExitedProcess:
+            pid = 123
+            def wait(self):
+                return 1
+
+        manager = self._player_manager()
+        process = ExitedProcess()
+        manager.proc = process
+        manager.started_at = time.time()
+        manager.process_lock = threading.RLock()
+        manager._append_log = lambda *_args, **_kwargs: None
+        manager._watch_process(process, manager._player_session_generation, None)
+        self.assertIsNone(manager.proc)
+        self.assertIsNone(manager.started_at)
+        self.assertFalse(manager._players_tracking_active)
+        self.assertEqual(manager._online_player_snapshot(), [])
+
+    def test_old_process_watcher_cannot_clear_newer_player_session(self):
+        class ExitedProcess:
+            def wait(self):
+                return 0
+
+        manager = self._player_manager()
+        old_process = ExitedProcess()
+        current_process = object()
+        manager.proc = current_process
+        manager.started_at = 123.0
+        manager.process_lock = threading.RLock()
+        manager._player_session_generation = 8
+        manager.online_players["currentplayer"] = {"name": "CurrentPlayer", "xuid": "84"}
+        manager._append_log = lambda *_args, **_kwargs: None
+        manager._watch_process(old_process, 7, None)
+        self.assertIs(manager.proc, current_process)
+        self.assertEqual(manager.started_at, 123.0)
+        self.assertTrue(manager._players_tracking_active)
+        self.assertEqual(manager._online_player_snapshot(), [
+            {"name": "CurrentPlayer", "xuid": "84"}
+        ])
+
+    def test_online_player_snapshot_is_detached_from_live_state(self):
+        manager = self._player_manager()
+        manager.online_players["player"] = {"name": "Player", "xuid": "1"}
+        snapshot = manager._online_player_snapshot()
+        snapshot[0]["name"] = "Changed"
+        self.assertEqual(manager.online_players["player"]["name"], "Player")
+
+    def _status_manager(self, root, process):
+        manager = self._player_manager()
+        manager.process_lock = threading.RLock()
+        manager.proc = process
+        manager.started_at = time.time() if process.poll() is None else None
+        manager.root = root
+        manager.backup_dir = root / "backups"
+        manager.server_version = "1.26.0"
+        manager.server_version_source = "test fixture"
+        manager.server_version_detected_at = None
+        manager._version_signature = None
+        manager.auto_backup_hours = 0
+        manager.backup_keep = 3
+        manager.tunnel_start_with_bds = False
+        manager.tunnel_stop_with_bds = False
+        manager._executable_signature = lambda: None
+        manager._read_props = lambda: {"server-name": "Test server", "level-name": "TestWorld"}
+        manager.list_backups = lambda: []
+        manager._unmanaged_bds = lambda: []
+        return manager
+
+    def test_status_returns_player_list_and_count_from_one_snapshot(self):
+        class RunningProcess:
+            pid = 123
+            @staticmethod
+            def poll():
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = self._status_manager(Path(tmp), RunningProcess())
+            manager.online_players["player"] = {"name": "Player", "xuid": "1"}
+            status = manager.status()
+        self.assertEqual(status["players"], [{"name": "Player", "xuid": "1"}])
+        self.assertEqual(status["player_count"], len(status["players"]))
+        self.assertEqual(status["player_count"], 1)
+
+    def test_status_reconciles_exited_process_before_watcher_runs(self):
+        class ExitedProcess:
+            pid = 123
+            @staticmethod
+            def poll():
+                return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = self._status_manager(Path(tmp), ExitedProcess())
+            manager.online_players["player"] = {"name": "Player", "xuid": "1"}
+            status = manager.status()
+        self.assertFalse(status["running"])
+        self.assertEqual(status["players"], [])
+        self.assertEqual(status["player_count"], 0)
+        self.assertIsNone(manager.proc)
+        self.assertFalse(manager._players_tracking_active)
+
     def test_directory_picker_returns_selected_existing_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             selected = Path(tmp)
@@ -277,7 +460,10 @@ class CoreTests(unittest.TestCase):
             manager.proc = None
             manager.started_at = None
             manager.process_lock = threading.RLock()
+            manager.players_lock = threading.RLock()
             manager.online_players = {}
+            manager._player_session_generation = 0
+            manager._players_tracking_active = False
             manager._unmanaged_bds = lambda: []
             manager._persist_config = lambda: None
             manager._append_log = lambda *args, **kwargs: None

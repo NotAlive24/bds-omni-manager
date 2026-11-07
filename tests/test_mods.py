@@ -157,6 +157,19 @@ class ModsManagerTests(unittest.TestCase):
         staging = self.root / ".bds-omni-pack-staging"
         self.assertFalse(staging.exists() and any(staging.iterdir()))
 
+    def test_bundle_enforces_combined_archive_entry_limit(self):
+        archive = write_mcaddon(Path(self.temp.name) / "many-files.mcaddon", [
+            ("behavior.mcpack", pack_bytes("behavior")),
+            ("resource.mcpack", pack_bytes("resource")),
+        ])
+        # The outer archive has two entries, but each nested pack has two files.
+        with patch.object(bds, "MAX_CONTENT_ARCHIVE_ENTRIES", 3):
+            with self.assertRaisesRegex(ValueError, "Combined add-on archives contain more than 3 files"):
+                self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(self.installed(), [])
+        staging = self.root / ".bds-omni-pack-staging"
+        self.assertFalse(staging.exists() and any(staging.iterdir()))
+
     def test_bundle_enforces_combined_unpacked_size_limit(self):
         def large_pack(kind, pack_uuid, module_uuid):
             content = io.BytesIO()
@@ -182,6 +195,54 @@ class ModsManagerTests(unittest.TestCase):
         result = self.manager.import_mod_archive(archive, archive.name)
         self.assertEqual(result["installed_count"], 1)
         self.assertEqual(len(self.installed()), 1)
+
+    def test_zip_with_multiple_unpacked_pack_folders_installs_them_atomically(self):
+        archive = Path(self.temp.name) / "folder-bundle.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Project/Behavior/manifest.json", json.dumps(pack_manifest("behavior")))
+            zf.writestr("Project/Behavior/functions/main.mcfunction", "say behavior pack loaded\n")
+            zf.writestr("Project/Resources/manifest.json", json.dumps(pack_manifest("resource")))
+            zf.writestr("Project/Resources/textures/item_texture.json", "{}")
+        result = self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(result["mode"], "bundle")
+        self.assertEqual(result["installed_count"], 2)
+        self.assertEqual({record["kind"] for record in self.installed()}, {"behavior", "resource"})
+        self.assertTrue(all(record["valid"] for record in self.installed()))
+
+    def test_zip_with_one_deeply_wrapped_pack_folder_is_supported(self):
+        archive = Path(self.temp.name) / "deep-wrapped.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Downloaded/Addon/BehaviorPack/manifest.json", json.dumps(pack_manifest("behavior")))
+            zf.writestr("Downloaded/Addon/BehaviorPack/functions/main.mcfunction", "say hello\n")
+        result = self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(result["installed_count"], 1)
+        self.assertEqual(self.installed()[0]["kind"], "behavior")
+
+    def test_multi_folder_zip_with_invalid_second_pack_installs_nothing(self):
+        archive = Path(self.temp.name) / "invalid-folder-bundle.zip"
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("Behavior/manifest.json", json.dumps(pack_manifest("behavior")))
+            zf.writestr("Behavior/functions/main.mcfunction", "say valid\n")
+            zf.writestr("Resources/manifest.json", "{not json")
+        with self.assertRaises(ValueError):
+            self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(self.installed(), [])
+        staging = self.root / ".bds-omni-pack-staging"
+        self.assertFalse(staging.exists() and any(staging.iterdir()))
+
+    def test_skin_pack_mcpack_is_rejected_with_specific_bds_guidance(self):
+        archive = Path(self.temp.name) / "skins.mcpack"
+        archive.write_bytes(pack_bytes("resource", module_type="skin_pack"))
+        with self.assertRaisesRegex(ValueError, "skin pack.*cannot be installed or activated"):
+            self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(self.installed(), [])
+
+    def test_world_template_mcpack_is_rejected_with_specific_guidance(self):
+        archive = Path(self.temp.name) / "template.mcpack"
+        archive.write_bytes(pack_bytes("resource", module_type="world_template"))
+        with self.assertRaisesRegex(ValueError, "world template.*Worlds & Packs"):
+            self.manager.import_mod_archive(archive, archive.name)
+        self.assertEqual(self.installed(), [])
 
     def test_bundle_with_world_archive_is_rejected_without_partial_pack_install(self):
         archive = Path(self.temp.name) / "mixed-content.mcaddon"
@@ -316,6 +377,19 @@ class ModsHttpIntegrationTests(unittest.TestCase):
         status, body = self.upload("/api/mods/import", archive, archive.name)
         self.assertEqual(status, 400)
         self.assertIn("Java .jar", body["error"])
+
+    def test_multiple_mcpack_archives_can_be_imported_separately_over_http(self):
+        behavior = write_mcpack(Path(self.temp.name) / "separate-behavior.mcpack", "behavior")
+        resource = write_mcpack(Path(self.temp.name) / "separate-resource.mcpack", "resource")
+        for archive in (behavior, resource):
+            status, body = self.upload("/api/mods/import", archive, archive.name)
+            self.assertEqual(status, 200, body)
+            self.assertEqual(body["installed_count"], 1)
+        status, inventory = self.request("/api/mods")
+        self.assertEqual(status, 200)
+        self.assertEqual(inventory["summary"]["total"], 2)
+        self.assertEqual(inventory["summary"]["behavior"], 1)
+        self.assertEqual(inventory["summary"]["resource"], 1)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,20 @@ class UiRegressionTests(unittest.TestCase):
         self.assertIn("if(stateRefreshRunning||document.visibilityState==='hidden')return", HTML)
         self.assertIn("setInterval(safeRefreshState,3500)", HTML)
 
+    def test_player_and_success_status_elements_have_explicit_oled_styles(self):
+        for selector in (".player-row,.pack-row,.world-row,.backup-row{", ".avatar{", ".mod-status.valid{", ".mod-status.invalid{", ".stat-value{"):
+            self.assertIn(selector, HTML)
+        self.assertIn(".weekday-picker input,.schedule-enable input{accent-color:var(--green)", HTML)
+        self.assertIn(".weekday-picker input:focus-visible,.schedule-enable input:focus-visible", HTML)
+        self.assertIn(".schedule-form-grid .weekday-picker input,.schedule-form-grid .schedule-enable input{width:15px", HTML)
+
+    def test_player_state_refresh_discards_out_of_order_responses(self):
+        self.assertIn("let stateRequestSerial=0", HTML)
+        self.assertIn("const requestId=++stateRequestSerial", HTML)
+        self.assertIn("if(requestId!==stateRequestSerial)return", HTML)
+        self.assertIn("Number.isSafeInteger(s.player_count)?s.player_count:players.length", HTML)
+        self.assertIn("players.length?players.map(p=>", HTML)
+
     def test_ui_has_consistent_dark_visual_system(self):
         self.assertIn("--bg:#000", HTML)
         self.assertIn("--radius:14px", HTML)
@@ -110,7 +124,7 @@ class UiRegressionTests(unittest.TestCase):
 
     def test_application_version_is_updated(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "2.0.0"', main_source)
+        self.assertIn('APP_VERSION = "2.0.1"', main_source)
 
     def test_content_intelligence_workspace_and_navigation_exist(self):
         for value in (
@@ -229,14 +243,22 @@ class UiRegressionTests(unittest.TestCase):
     def test_mods_ui_has_explicit_oled_styles_and_bedrock_format_guidance(self):
         for selector in (
             ".mods-panel .field input:not([type=file])", ".mods-panel .field select",
-            ".mods-panel .mods-file-input::file-selector-button", ".mods-stat",
+            ".mods-panel .mods-file-input::file-selector-button", ".mods-panel .mods-file-input:focus-visible", ".mods-stat",
             ".mod-card", ".mod-icon", ".mod-status", ".mod-meta-strip",
             ".mod-details summary", ".mod-action-buttons .btn:disabled",
             ".mods-empty", ".mods-warning",
         ):
             self.assertIn(selector, HTML)
-        self.assertIn('accept=".mcaddon,.mcpack,.zip,application/zip"', HTML)
-        self.assertIn('Java <code>.jar</code> mods and Fabric/Forge loaders do not run on Bedrock Dedicated Server.', HTML)
+        self.assertIn('accept=".mcaddon,.mcpack,.zip,application/zip" multiple', HTML)
+        self.assertIn('Select one or more Bedrock', HTML)
+        self.assertIn('client-only skin packs', HTML)
+        self.assertIn('Import <code>.mcworld</code> files from World Management.', HTML)
+        self.assertIn('function updateModImportSelection()', HTML)
+        self.assertIn("const input=$(\'modImportFile\'),files=Array.from(input.files||[])", HTML)
+        self.assertIn('failed files remain selected for retry', HTML)
+        self.assertIn('Java <code>.jar</code> mods and Fabric/Forge loaders do not run on BDS.', HTML)
+        self.assertIn('one or more unpacked pack folders', HTML)
+        self.assertIn('each with its own <code>manifest.json</code>', HTML)
         self.assertIn("function importModFile()", HTML)
         self.assertIn("function renderMods()", HTML)
         self.assertIn("function handleModAction(action,locationId)", HTML)

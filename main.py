@@ -30,7 +30,7 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs, unquote, quote
 
 APP_NAME = "BDS Omni Manager"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 HOME = Path.home()
 CONFIG_DIR = HOME / ".config" / "bds-omni-manager"
 STATE_DIR = HOME / ".local" / "state" / "bds-omni-manager"
@@ -914,7 +914,13 @@ class Manager:
         self.log_lock = threading.Lock()
         self.log_id = 0
         self.logs: deque[dict[str, Any]] = deque(maxlen=1600)
+        # Player connection state is per managed BDS process, never rebuilt
+        # from historical logs. The generation prevents late output from an
+        # exited process from mutating a newer server session.
+        self.players_lock = threading.RLock()
         self.online_players: dict[str, dict[str, str]] = {}
+        self._player_session_generation = 0
+        self._players_tracking_active = False
         self.metrics_lock = threading.Lock()
         self.metrics_samples: deque[dict[str, Any]] = deque(maxlen=180)
         self._metrics_previous: dict[str, Any] = {}
@@ -1244,7 +1250,9 @@ class Manager:
         except OSError:
             return
         for line in lines:
-            self._append_log(line, persist=False)
+            # Historical logs are displayed for context only. Replaying old
+            # join/leave entries must not recreate a live player session.
+            self._append_log(line, persist=False, track_player=False)
 
     def _persist_config(self) -> None:
         self.config.update({
@@ -1257,7 +1265,13 @@ class Manager:
         })
         atomic_write(CONFIG_FILE, json.dumps(self.config, indent=2) + "\n")
 
-    def _append_log(self, line: str, persist: bool = True) -> None:
+    def _append_log(
+        self,
+        line: str,
+        persist: bool = True,
+        track_player: bool = True,
+        player_generation: int | None = None,
+    ) -> None:
         stamp = now_iso()
         clean = line.rstrip("\r\n")
         with self.log_lock:
@@ -1274,18 +1288,62 @@ class Manager:
                 self.save_capture_lines.append(clean)
             if "files are now ready to be copied" in clean.lower():
                 self.save_ready_event.set()
-        self._track_player(clean)
+        if track_player:
+            self._track_player(clean, player_generation=player_generation)
 
-    def _track_player(self, line: str) -> None:
-        connected = re.search(r"Player connected:\s*(.*?)(?:,\s*xuid:\s*(\S+))?$", line, re.I)
-        disconnected = re.search(r"Player disconnected:\s*(.*?)(?:,\s*xuid:\s*(\S+))?$", line, re.I)
-        if connected:
-            name = connected.group(1).strip()
+    def _track_player(self, line: str, player_generation: int | None = None) -> None:
+        """Apply one live BDS join/leave event to the current session."""
+        event = re.search(r"\bPlayer\s+(connected|disconnected):\s*(.*)$", line, re.I)
+        if not event:
+            return
+
+        payload = event.group(2).strip()
+        # A disconnect normally includes both `xuid` and `pfid`; a connect
+        # normally includes only `xuid`. Strip either metadata field from the
+        # displayed name, then read XUID independently of metadata ordering.
+        metadata = re.search(r",\s*(?:xuid|pfid)\s*:", payload, re.I)
+        if metadata:
+            name = payload[:metadata.start()].strip()
+            metadata_text = payload[metadata.start():]
+        else:
+            name = payload
+            metadata_text = ""
+        xuid_match = re.search(r"(?:^|,)\s*xuid\s*:\s*([^,\s]*)", metadata_text, re.I)
+        xuid = xuid_match.group(1).strip() if xuid_match else ""
+        key = name.casefold()
+
+        with self.players_lock:
+            if not self._players_tracking_active:
+                return
+            if player_generation is not None and player_generation != self._player_session_generation:
+                return
+
+            if event.group(1).casefold() == "connected":
+                if not name:
+                    return
+                # Prefer one entry per authenticated account when the server
+                # provides an XUID, even if the visible name changed.
+                if xuid:
+                    for existing_key, player in list(self.online_players.items()):
+                        if player.get("xuid") == xuid and existing_key != key:
+                            self.online_players.pop(existing_key, None)
+                self.online_players[key] = {"name": name, "xuid": xuid}
+                return
+
+            # Names are the primary key because offline/split-screen entries
+            # may have a blank XUID. Fall back to XUID when the leave event's
+            # visible name differs from the original connection event.
             if name:
-                self.online_players[name.lower()] = {"name": name, "xuid": connected.group(2) or ""}
-        elif disconnected:
-            name = disconnected.group(1).strip()
-            self.online_players.pop(name.lower(), None)
+                self.online_players.pop(key, None)
+            if xuid:
+                for existing_key, player in list(self.online_players.items()):
+                    if player.get("xuid") == xuid:
+                        self.online_players.pop(existing_key, None)
+
+    def _online_player_snapshot(self) -> list[dict[str, str]]:
+        """Return a consistent, detached snapshot for the HTTP status API."""
+        with self.players_lock:
+            return [dict(player) for player in self.online_players.values()]
 
     def log_since(self, since: int = 0) -> list[dict[str, Any]]:
         with self.log_lock:
@@ -1386,6 +1444,17 @@ class Manager:
         with self.process_lock:
             proc = self.proc
             running = bool(proc and proc.poll() is None)
+            if proc and not running:
+                # The status endpoint can observe process exit before the
+                # watcher thread runs. Reconcile here so the dashboard never
+                # reports players for an already-dead managed process.
+                with self.players_lock:
+                    if self._players_tracking_active:
+                        self._players_tracking_active = False
+                        self.online_players.clear()
+                if self.proc is proc:
+                    self.proc = None
+                    self.started_at = None
             pid = proc.pid if running and proc else None
             uptime = int(time.time() - self.started_at) if running and self.started_at else 0
         current_signature = self._executable_signature()
@@ -1399,6 +1468,7 @@ class Manager:
         worlds = sorted([p.name for p in worlds_dir.iterdir() if p.is_dir()]) if worlds_dir.is_dir() else []
         backups = self.list_backups()
         unmanaged = self._unmanaged_bds() if not running else []
+        players = self._online_player_snapshot()
         return {
             "app_version": APP_VERSION,
             "server_dir": str(self.root),
@@ -1418,8 +1488,8 @@ class Manager:
             "version": self.server_version,
             "version_source": self.server_version_source,
             "version_detected_at": self.server_version_detected_at,
-            "players": list(self.online_players.values()),
-            "player_count": len(self.online_players),
+            "players": players,
+            "player_count": len(players),
             "properties": props,
             "backups": backups[:8],
             "auto_backup_hours": self.auto_backup_hours,
@@ -1473,26 +1543,53 @@ class Manager:
                 self.proc = None
                 raise ValueError(f"Could not start BDS: {exc}") from exc
             self.started_at = time.time()
-            self.online_players.clear()
-            self.output_thread = threading.Thread(target=self._read_process_output, args=(self.proc,), daemon=True)
+            with self.players_lock:
+                self._player_session_generation += 1
+                player_generation = self._player_session_generation
+                self._players_tracking_active = True
+                self.online_players.clear()
+            self.output_thread = threading.Thread(
+                target=self._read_process_output,
+                args=(self.proc, player_generation),
+                name=f"bds-output-{self.proc.pid}",
+                daemon=True,
+            )
             self.output_thread.start()
-            threading.Thread(target=self._watch_process, args=(self.proc,), daemon=True).start()
+            threading.Thread(
+                target=self._watch_process,
+                args=(self.proc, player_generation, self.output_thread),
+                name=f"bds-watch-{self.proc.pid}",
+                daemon=True,
+            ).start()
             return {"ok": True, "message": f"BDS started (PID {self.proc.pid})."}
 
-    def _read_process_output(self, proc: subprocess.Popen[str]) -> None:
+    def _read_process_output(self, proc: subprocess.Popen[str], player_generation: int) -> None:
         try:
             assert proc.stdout
             for line in proc.stdout:
-                self._append_log(line)
+                self._append_log(line, player_generation=player_generation)
                 self._capture_server_version(line)
         except (OSError, ValueError):
             pass
 
-    def _watch_process(self, proc: subprocess.Popen[str]) -> None:
+    def _watch_process(
+        self,
+        proc: subprocess.Popen[str],
+        player_generation: int,
+        reader: threading.Thread | None,
+    ) -> None:
         code = proc.wait()
-        self._append_log(f"[manager] BDS process exited with code {code}.")
+        self._append_log(f"[manager] BDS process exited with code {code}.", track_player=False)
+        # Drain final log output before ending this session. A generation check
+        # also prevents a delayed reader from changing a subsequent session.
+        if reader and reader is not threading.current_thread():
+            reader.join(timeout=2)
         with self.process_lock:
             if self.proc is proc:
+                with self.players_lock:
+                    if self._player_session_generation == player_generation:
+                        self._players_tracking_active = False
+                        self.online_players.clear()
                 self.proc = None
                 self.started_at = None
 
@@ -1523,8 +1620,17 @@ class Manager:
     def stop(self, timeout: int = 30) -> dict[str, Any]:
         with self.process_lock:
             proc = self.proc
-            if not proc or proc.poll() is not None:
+            if not proc:
                 return {"ok": True, "message": "BDS is not running under this manager."}
+            if proc.poll() is not None:
+                with self.players_lock:
+                    self._players_tracking_active = False
+                    self.online_players.clear()
+                self.proc = None
+                self.started_at = None
+                return {"ok": True, "message": "BDS is not running under this manager."}
+            reader = self.output_thread
+            player_generation = self._player_session_generation
             self._append_log("[manager] Requesting graceful shutdown (stop).")
             try:
                 if proc.stdin:
@@ -1543,9 +1649,18 @@ class Manager:
                 self._append_log("[manager] SIGTERM timed out; sending SIGKILL.")
                 proc.kill()
                 proc.wait(timeout=5)
-        reader = getattr(self, "output_thread", None)
         if reader and reader is not threading.current_thread():
             reader.join(timeout=2)
+        # The watcher performs the same cleanup for crashes/unexpected exits.
+        # This synchronous path keeps the Stop action's state deterministic.
+        with self.process_lock:
+            if self.proc is proc:
+                with self.players_lock:
+                    if self._player_session_generation == player_generation:
+                        self._players_tracking_active = False
+                        self.online_players.clear()
+                self.proc = None
+                self.started_at = None
         for stream in (proc.stdin, proc.stdout, proc.stderr):
             if stream and not stream.closed:
                 try:
@@ -2695,10 +2810,15 @@ class Manager:
                     "version": module_version,
                     "entry": str(module.get("entry", ""))[:512],
                 })
+            if "skin_pack" in module_types:
+                raise ValueError("This archive is a skin pack. Skin packs are client-side content and cannot be installed or activated by Bedrock Dedicated Server.")
+            if "world_template" in module_types:
+                raise ValueError("This archive is a world template, not a server add-on pack. Import a compatible world archive through Worlds & Packs instead.")
             has_behavior = bool(module_types & {"data", "script", "client_data"})
             has_resource = "resources" in module_types
             if has_behavior == has_resource:
-                raise ValueError("Could not determine whether this is a behavior pack or resource pack. Import one behavior/resource .mcpack at a time.")
+                detected = ", ".join(sorted(module_types)) or "none"
+                raise ValueError(f"Unsupported or mixed Bedrock module types ({detected}). BDS add-on installation supports behavior packs (data/script) and resource packs (resources); a pack cannot mix those types.")
             kind = "behavior" if has_behavior else "resource"
             dependencies = manifest.get("dependencies", [])
             if not isinstance(dependencies, list):
@@ -2730,6 +2850,7 @@ class Manager:
                 "min_engine_version": self._version_text(min_engine) if min_engine is not None else "",
                 "preview_warning": preview_warning,
                 "extracted_size": extracted_size,
+                "archive_entry_count": len(entries),
                 "manifest": manifest,
             }
         except (OSError, json.JSONDecodeError, UnicodeError, zipfile.BadZipFile) as exc:
@@ -2793,12 +2914,91 @@ class Manager:
             except OSError:
                 pass
 
+    @staticmethod
+    def _pack_manifest_prefixes(entries: list[tuple[zipfile.ZipInfo, PurePosixPath]]) -> list[str]:
+        """Find independent pack roots in a ZIP of one or more unpacked packs.
+
+        A pack root is a directory containing manifest.json. When one pack root
+        contains another manifest deeper in its own tree, the shallowest root
+        wins so a pack's bundled/example content is not imported a second time.
+        """
+        candidates: set[str] = set()
+        for info, path in entries:
+            if info.is_dir() or path.name != "manifest.json":
+                continue
+            parent = path.parent.as_posix()
+            candidates.add("" if parent == "." else parent.rstrip("/") + "/")
+        if "" in candidates:
+            return [""]
+        roots: list[str] = []
+        for prefix in sorted(candidates, key=lambda value: (value.count("/"), len(value), value.casefold())):
+            if not any(prefix.startswith(parent) for parent in roots):
+                roots.append(prefix)
+        return roots
+
+    @staticmethod
+    def _write_pack_archive_from_zip_prefix(
+        outer: zipfile.ZipFile,
+        entries: list[tuple[zipfile.ZipInfo, PurePosixPath]],
+        prefix: str,
+        destination: Path,
+    ) -> int:
+        """Stream one unpacked pack directory from a composite ZIP to a temp mcpack."""
+        selected = []
+        for info, path in entries:
+            if info.is_dir():
+                continue
+            raw = path.as_posix()
+            if prefix:
+                if not raw.startswith(prefix):
+                    continue
+                relative = raw[len(prefix):]
+            else:
+                relative = raw
+            if relative:
+                selected.append((info, relative))
+        expected_size = sum(info.file_size for info, _ in selected)
+        if expected_size > MAX_CONTENT_EXTRACTED_BYTES:
+            raise ValueError("Unpacked add-on folder exceeds the 32 GiB extraction limit.")
+        try:
+            available = shutil.disk_usage(destination.parent).free
+        except OSError:
+            available = expected_size
+        if available < expected_size + 1024 * 1024:
+            raise ValueError("Not enough free disk space to stage this unpacked add-on folder safely.")
+        written_total = 0
+        member_count = 0
+        with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as pack_zip:
+            for info, relative in selected:
+                member_count += 1
+                output_info = zipfile.ZipInfo(relative)
+                output_info.compress_type = zipfile.ZIP_STORED
+                output_info.external_attr = info.external_attr
+                actual = 0
+                with outer.open(info, "r") as source, pack_zip.open(output_info, "w") as output:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        actual += len(chunk)
+                        written_total += len(chunk)
+                        if actual > info.file_size or written_total > MAX_CONTENT_EXTRACTED_BYTES:
+                            raise ValueError("Unpacked add-on folders exceed the 32 GiB extraction limit.")
+                        output.write(chunk)
+                if actual != info.file_size:
+                    raise ValueError(f"ZIP pack entry has an unexpected length: {info.filename}")
+        if member_count == 0:
+            raise ValueError("A detected pack folder is empty.")
+        return written_total
+
     def import_mod_archive(self, archive_path: Path, filename: str, requested_scope: str = "shared", world_name: str = "") -> dict[str, Any]:
-        """Install one .mcpack or an atomic .mcaddon bundle of Bedrock add-on packs."""
+        """Import Bedrock .mcpack/.mcaddon files and ZIPs of one or more pack folders."""
         self._require_content_server_stopped()
         suffix = Path(filename).suffix.lower()
         if suffix not in (".mcaddon", ".mcpack", ".zip"):
-            raise ValueError("Bedrock mods must be .mcaddon, .mcpack, or a ZIP containing a valid Bedrock pack. Java .jar mods are not compatible with BDS.")
+            raise ValueError("Bedrock add-ons must be .mcpack, .mcaddon, or a ZIP containing valid Bedrock pack folders. Java .jar mods are not compatible with BDS.")
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise ValueError("Add-on archive is missing or is not a regular file.")
         if archive_path.stat().st_size > MAX_CONTENT_UPLOAD_BYTES:
             raise ValueError("Mod archive exceeds the 8 GiB upload limit.")
         if suffix == ".mcpack":
@@ -2817,43 +3017,62 @@ class Manager:
                 bundled_worlds = [path.name for info, path in outer_entries if not info.is_dir() and path.suffix.lower() == ".mcworld"]
                 if bundled_worlds:
                     raise ValueError("This add-on bundle also contains a .mcworld archive. Import the world separately from Worlds & Packs; no content from this bundle was installed.")
-                # A .zip may simply be a single pack archive. Preserve that useful import path.
-                try:
-                    self._root_prefix(outer_entries, "manifest.json")
-                    has_pack_manifest = True
-                except ValueError:
-                    has_pack_manifest = False
-                if not nested:
-                    if has_pack_manifest:
+                pack_prefixes = self._pack_manifest_prefixes(outer_entries)
+                if not nested and not pack_prefixes:
+                    raise ValueError("The archive contains no .mcpack files or folders with a root manifest.json. Import a Bedrock behavior/resource pack, .mcpack, or .mcaddon.")
+                # Preserve the simple single-pack response for a plain pack ZIP or
+                # a ZIP with one enclosing folder that _prepare_pack_archive knows.
+                if not nested and len(pack_prefixes) == 1:
+                    try:
+                        self._root_prefix(outer_entries, "manifest.json")
+                    except ValueError:
+                        pass
+                    else:
                         return self.import_pack_archive(archive_path, requested_scope, world_name)
-                    raise ValueError("The .mcaddon/.zip does not contain any .mcpack files or a root manifest.json. Export a Bedrock add-on package and try again.")
+
                 stage_parent = self._pack_staging_root()
                 bundle_root = stage_parent / ("bundle-" + secrets.token_hex(12))
                 bundle_root.mkdir(parents=False, exist_ok=False)
                 prepared_packs: list[dict[str, Any]] = []
                 nested_bytes = 0
                 bundle_extracted_size = 0
+                bundle_entry_count = 0
                 try:
-                    for index, (info, _) in enumerate(nested, start=1):
-                        nested_bytes += info.file_size
-                        if nested_bytes > MAX_CONTENT_EXTRACTED_BYTES:
-                            raise ValueError("Nested .mcpack files exceed the 32 GiB unpacked-container limit.")
-                        nested_path = bundle_root / f"nested-{index}.mcpack"
-                        written = 0
-                        with outer.open(info, "r") as source, nested_path.open("xb") as output:
-                            while True:
-                                chunk = source.read(1024 * 1024)
-                                if not chunk:
-                                    break
-                                written += len(chunk)
-                                if written > info.file_size or written > MAX_CONTENT_EXTRACTED_BYTES:
-                                    raise ValueError("Nested .mcpack expanded beyond its declared archive size.")
-                                output.write(chunk)
-                        if written != info.file_size:
-                            raise ValueError(f"Nested .mcpack has an unexpected length: {info.filename}")
+                    pack_sources: list[tuple[str, Any]] = []
+                    pack_sources.extend(("mcpack", item) for item in nested)
+                    pack_sources.extend(("folder", prefix) for prefix in pack_prefixes)
+                    for index, (source_kind, source_value) in enumerate(pack_sources, start=1):
+                        nested_path = bundle_root / f"source-{index}.mcpack"
+                        if source_kind == "mcpack":
+                            info, path = source_value
+                            nested_bytes += info.file_size
+                            if nested_bytes > MAX_CONTENT_EXTRACTED_BYTES:
+                                raise ValueError("Nested .mcpack files exceed the 32 GiB unpacked-container limit.")
+                            written = 0
+                            with outer.open(info, "r") as source, nested_path.open("xb") as output:
+                                while True:
+                                    chunk = source.read(1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    written += len(chunk)
+                                    if written > info.file_size or written > MAX_CONTENT_EXTRACTED_BYTES:
+                                        raise ValueError("Nested .mcpack expanded beyond its declared archive size.")
+                                    output.write(chunk)
+                            if written != info.file_size:
+                                raise ValueError(f"Nested .mcpack has an unexpected length: {info.filename}")
+                            source_name = path.name
+                        else:
+                            prefix = str(source_value)
+                            nested_bytes += self._write_pack_archive_from_zip_prefix(outer, outer_entries, prefix, nested_path)
+                            if nested_bytes > MAX_CONTENT_EXTRACTED_BYTES:
+                                raise ValueError("Unpacked add-on folders exceed the 32 GiB container limit.")
+                            source_name = prefix.rstrip("/").split("/")[-1] if prefix else Path(filename).name
                         prepared = self._prepare_pack_archive(nested_path, bundle_root, f"pack-{index}")
-                        prepared["source_name"] = Path(info.filename).name
+                        prepared["source_name"] = source_name
                         prepared_packs.append(prepared)
+                        bundle_entry_count += int(prepared.get("archive_entry_count", 0))
+                        if bundle_entry_count > MAX_CONTENT_ARCHIVE_ENTRIES:
+                            raise ValueError(f"Combined add-on archives contain more than {MAX_CONTENT_ARCHIVE_ENTRIES:,} files. Nothing was installed.")
                         bundle_extracted_size += int(prepared.get("extracted_size", 0))
                         if bundle_extracted_size > MAX_CONTENT_EXTRACTED_BYTES:
                             raise ValueError("Combined add-on contents exceed the 32 GiB extraction limit. Nothing was installed.")
@@ -2883,7 +3102,6 @@ class Manager:
                             try:
                                 os.replace(target, item["stage"])
                             except OSError:
-                                # If the staging rename cannot be completed, remove only the just-created target.
                                 if target.is_dir() and not target.is_symlink():
                                     shutil.rmtree(target, ignore_errors=True)
                         raise
@@ -2902,7 +3120,6 @@ class Manager:
                         pass
         except (OSError, zipfile.BadZipFile) as exc:
             raise ValueError(f"Could not import Bedrock add-on: {exc}") from exc
-
     def mods(self) -> dict[str, Any]:
         """Return one normalized inventory for the dedicated Mods page."""
         records = self._pack_records()

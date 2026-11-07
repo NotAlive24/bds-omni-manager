@@ -3,7 +3,7 @@
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-111111?logo=linux&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-46e59a)
-![Version 2.0.0](https://img.shields.io/badge/release-2.0.0-46e59a)
+![Version 2.0.1](https://img.shields.io/badge/release-2.0.1-46e59a)
 
 **A local-only, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS).** Manage server lifecycle, commands, properties, worlds, Bedrock add-ons, backups, monitoring, scheduled tasks, and the BedrockNodeTunnel Linux user service from one browser interface.
 
@@ -45,10 +45,12 @@ Open the manager's **Settings** page and select the folder containing both `bedr
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
 - [Changelog](CHANGELOG.md)
-- [GitHub launch and release guide](GITHUB_LAUNCH_GUIDE.md)
-- [2.0.0 release notes](RELEASE_NOTES_v2.0.0.md)
+- [2.0.1 release notes](docs/releases/RELEASE_NOTES_v2.0.1.md)
+- [2.0.0 release notes](docs/releases/RELEASE_NOTES_v2.0.0.md)
 
 ---
+
+**Version 2.0.1** — Player tracking reliability and add-on batch import: disconnect parsing for BDS XUID/PFID metadata, per-process player-state isolation, process-exit cleanup, consistent status snapshots, stale-response protection, and multi-file `.mcpack`/`.mcaddon`/ZIP importing with failed-file retry.
 
 **Version 2.0.0** — Content Intelligence: world-aware pack dependency graphs, dependency-cycle detection, manifest/engine compatibility advisories, cross-pack asset-overlap hashing, safe behavior/resource stack reordering, portable world-specific stack profiles with preview/apply validation, and verified backup snapshot comparison.
 
@@ -82,8 +84,9 @@ A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS)
 
 - **Dedicated Mods & Add-ons page:** one inventory for server-shared and world-specific Bedrock packs, with search by name/UUID/author/module, filters by behavior/resource/script type and validation state, summary counts, per-pack metadata, active-world references, and a selected-world activation view.
 - **Bedrock-native meaning of “mods”:** this section manages Bedrock add-ons—behavior packs, resource packs and Script API modules packaged inside behavior packs. Java Edition `.jar` mods and Forge/Fabric loaders are not compatible with BDS and are explicitly rejected rather than treated as installable content.
-- **Single-pack import:** install `.mcpack` files or ZIP archives containing one valid pack. A ZIP may contain a root `manifest.json` or one wrapper folder around the pack.
+- **Pack import:** install individual `.mcpack` files or ZIP archives containing one or more valid Bedrock pack folders. A ZIP may contain a root `manifest.json`, wrapper folders, or several independent folders with their own manifests. The Mods page supports selecting multiple separate archives in one queued operation.
 - **Multi-pack `.mcaddon` import:** validate every nested `.mcpack` before installing any of them. All pack UUIDs, module UUIDs, manifests, dependencies, archive paths, CRCs, expanded sizes and destination collisions are checked before commit. Pack folder moves are committed as a bundle and rolled back if a later move fails. Imported packs are not automatically activated in a world.
+- **Multiple-archive queue (2.0.1):** choose several `.mcpack`, `.mcaddon`, and supported ZIP files at once. Each archive is uploaded in sequence; if one fails, successful archives remain installed and only failed files are retained for retry.
 - **World bundle boundary:** `.mcaddon` is a ZIP-based container format that may contain `.mcpack` or `.mcworld` content. This Mods importer deliberately rejects a bundle that contains a `.mcworld` rather than silently dropping its world component; import the world separately through Worlds & Packs. See [Microsoft's official file-extension reference](https://learn.microsoft.com/en-us/minecraft/creator/documents/bedrockserver/file-extensions?view=minecraft-bedrock-stable).
 - **Shared or world-specific scope:** install add-ons in the server's shared `behavior_packs/` or `resource_packs/` directories, or into one selected world's corresponding directories. Existing world folders are never overwritten during import.
 - **Manifest and dependency inspection:** view pack/header/module UUIDs and versions, module types, minimum engine version, authors, license, capabilities, dependencies, scope, size, active worlds, duplicate UUIDs and validation errors. Script modules are identified distinctly in the library.
@@ -138,12 +141,6 @@ A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS)
 - **Regression coverage:** added tests for invocation-scoped journal health, invalid-token claim state, executable discovery, XDG fallback behavior, and lifecycle failure reporting.
 
 ### Install BedrockNodeTunnel separately
-
-> [BedrockNodeTunnel for Linux](https://github.com/NotAlive24/BedrockNodeTunnel)
-
-> [BedrockNodeTunnel for Windows](https://github.com/stonercraft420/BedrockNodeTunnel)
-
-> [BedrockNode Site](https://www.bedrocknode.net/)
 
 The tunnel client is a separate upstream project. On Arch Linux, follow its official release instructions and install its `PKGBUILD` with `makepkg -si`. Then run `nethernet-client` once to complete the browser claim flow and allow it to save its token. In BDS Omni Manager, use **Bedrock Node Tunnel → Start tunnel** to start the installed user service and **Enable at login** if you want systemd to start that service with your user session.
 

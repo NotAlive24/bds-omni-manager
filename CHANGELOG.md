@@ -1,3 +1,20 @@
+## 2.0.1 — Player Tracking Reliability
+
+- Expanded the Mods & Add-ons importer to select and queue multiple `.mcpack`, `.mcaddon`, and supported `.zip` archives in one operation. Each archive is uploaded sequentially and installed using the existing validation and transaction safeguards; failed files remain selected for retry, avoiding duplicate uploads of successful files.
+- Clarified format boundaries: BDS-compatible behavior/resource/script packs are supported; Java `.jar` mods and client-only skin/world-template content are not server-installable, while `.mcworld` imports belong in World Management.
+- Fixed online-player counts remaining stale when Bedrock disconnect log lines include both `xuid` and `pfid`; player names are now parsed separately from trailing identity metadata.
+- Added XUID-based fallback removal for disconnect events whose visible name differs from the original join event, while preserving name-based cleanup for empty/offline XUIDs.
+- Made player-state changes thread-safe and status responses use a detached, internally consistent player list/count snapshot.
+- Scoped join/leave events to a managed BDS process generation so delayed output from an old process cannot modify a newer session.
+- Cleared online-player state as soon as a managed BDS process exits, including crashes and exits first observed by the status endpoint or Stop action.
+- Prevented historical log replay from rebuilding a false online-player list after manager restart.
+- Protected the dashboard from out-of-order `/api/state` responses overwriting newer player counts; added defensive handling when player data is absent.
+- Completed explicit AMOLED styling for success-state badges and scheduled weekday/enable checkboxes, including pointer sizing and keyboard-focus outlines.
+- Expanded the Mods & Add-ons importer to select and queue multiple `.mcpack`, `.mcaddon`, and supported `.zip` archives in one operation. Each archive is uploaded sequentially and installed using the existing validation and transaction safeguards; failed files remain selected for retry, avoiding duplicate uploads of successful files.
+- Clarified format boundaries: BDS-compatible behavior/resource/script packs are supported; Java `.jar` mods and client-only skin/world-template content are not server-installable, while `.mcworld` imports belong in World Management.
+- Added an explicit keyboard-focus outline for the multiple-archive file picker.
+- Added regression tests for XUID/PFID disconnects, blank XUID/PFID-only events, XUID fallback, historical log replay, process-exit cleanup, process-generation races, detached snapshots, and browser refresh ordering.
+
 ## 2.0.0 — Content Intelligence
 
 - Added a world-aware behavior/resource pack dependency graph with UUID edges, missing/ambiguous dependency findings, cycle detection, malformed-manifest reporting, and minimum-engine-version advisories. Dependency resolution respects shared server packs and only the selected world's local pack folders.
