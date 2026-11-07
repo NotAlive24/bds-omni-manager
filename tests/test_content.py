@@ -700,7 +700,8 @@ class ContentHttpIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def request_upload(self, path, archive: Path, filename: str, extra_headers=None, authenticated=True):
         raw = archive.read_bytes()
@@ -713,7 +714,8 @@ class ContentHttpIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_world_and_pack_endpoints_require_authentication(self):
         status, body = self.request_json("/api/worlds", authenticated=False)

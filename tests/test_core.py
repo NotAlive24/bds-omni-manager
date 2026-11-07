@@ -750,7 +750,8 @@ class TunnelHttpIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=3) as response:
                 return response.status, __import__("json").loads(response.read().decode())
         except urllib.error.HTTPError as exc:
-            return exc.code, __import__("json").loads(exc.read().decode())
+            with exc:
+                return exc.code, __import__("json").loads(exc.read().decode())
 
     def test_tunnel_state_and_logs_api_require_authentication(self):
         code, _ = self._request("/api/tunnel/state", authenticated=False)

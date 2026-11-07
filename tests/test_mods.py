@@ -278,7 +278,8 @@ class ModsHttpIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def upload(self, path, archive: Path, filename: str, authenticated=True):
         raw = archive.read_bytes()
@@ -290,7 +291,8 @@ class ModsHttpIntegrationTests(unittest.TestCase):
             with urllib.request.urlopen(req, timeout=10) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_mod_inventory_and_upload_require_authentication(self):
         status, body = self.request("/api/mods", authenticated=False)

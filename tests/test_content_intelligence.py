@@ -504,7 +504,8 @@ class ContentIntelligenceHttpTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode("utf-8"))
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_content_lab_and_profiles_require_authentication(self):
         status, body = self.request("/api/content-lab?world=MainWorld", authenticated=False)

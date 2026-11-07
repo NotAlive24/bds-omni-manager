@@ -248,7 +248,8 @@ class MonitoringHttpApiTests(unittest.TestCase):
             with self.urllib_request.urlopen(req, timeout=3) as response:
                 return response.status, json.loads(response.read().decode())
         except self.urllib_error.HTTPError as exc:
-            return exc.code, json.loads(exc.read().decode())
+            with exc:
+                return exc.code, json.loads(exc.read().decode())
 
     def test_metrics_health_and_schedules_api_require_authentication(self):
         for path in ("/api/metrics", "/api/health", "/api/schedules"):
@@ -307,7 +308,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         return manager
 
     def test_scheduler_starts_matching_local_weekday_task_once(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
         job = {"id": "a1b2c3d4e5f6", "name": "Friday backup", "kind": "world_backup",
                "time": "02:30", "days": [4], "enabled": True, "last_run_key": ""}
         manager = self._scheduler_manager([job])
@@ -316,7 +317,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         class FakeDateTime:
             @staticmethod
             def now():
-                return datetime(2026, 11, 6, 2, 30, 20, tzinfo=timezone.utc)
+                return datetime(2026, 11, 6, 2, 30, 20).astimezone()
 
         class FakeThread:
             def __init__(self, **kwargs):
@@ -336,7 +337,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         self.assertTrue(manager._persist_scheduled_jobs.called)
 
     def test_scheduler_does_not_replay_a_missed_schedule_window(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
         job = {"id": "a1b2c3d4e5f6", "name": "Missed backup", "kind": "world_backup",
                "time": "02:30", "days": [4], "enabled": True, "last_run_key": ""}
         manager = self._scheduler_manager([job])
@@ -345,7 +346,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         class FakeDateTime:
             @staticmethod
             def now():
-                return datetime(2026, 11, 6, 2, 33, 10, tzinfo=timezone.utc)
+                return datetime(2026, 11, 6, 2, 33, 10).astimezone()
 
         class FakeThread:
             def __init__(self, **kwargs):
@@ -386,7 +387,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         self.assertTrue(manager._metrics_stop.is_set())
 
     def test_scheduler_worker_start_failure_is_recorded_and_releases_job(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
         job = {"id": "a1b2c3d4e5f6", "name": "Friday backup", "kind": "world_backup",
                "time": "02:30", "days": [4], "enabled": True, "last_run_key": ""}
         manager = MonitoringSchedulerLifecycleTests()._scheduler_manager([job])
@@ -394,7 +395,7 @@ class MonitoringSchedulerLifecycleTests(unittest.TestCase):
         class FakeDateTime:
             @staticmethod
             def now():
-                return datetime(2026, 11, 6, 2, 30, 20, tzinfo=timezone.utc)
+                return datetime(2026, 11, 6, 2, 30, 20).astimezone()
 
         class BrokenThread:
             def __init__(self, **kwargs):
