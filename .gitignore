@@ -1,0 +1,48 @@
+# Python bytecode and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.python-version.local
+
+# Test, coverage and tool caches
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Local runtime data and secrets (never commit these)
+.env
+.env.*
+!.env.example
+/config.json
+/scheduled_jobs.json
+/world_pack_profiles.json
+/manager.log
+*.log
+bedrocknode-token.txt
+
+# Local server data, worlds, archives and backups
+BDS-Backups/
+backups/
+worlds/
+behavior_packs/
+resource_packs/
+*.mcworld
+*.mcpack
+*.mcaddon
+
+# Build and editor noise
+build/
+dist/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

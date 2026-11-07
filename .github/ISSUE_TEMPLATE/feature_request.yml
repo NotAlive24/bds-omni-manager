@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an improvement or new BDS administration feature.
+title: "feature: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good feature requests explain the Bedrock workflow and the safety/compatibility constraints.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to accomplish, and what is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the GUI or backend behavior you would expect.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Bedrock version and compatibility notes
+      description: Include relevant BDS version, command/property or pack-format references if known.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
