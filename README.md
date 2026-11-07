@@ -140,7 +140,9 @@ A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS)
 ### Install BedrockNodeTunnel separately
 
 > [BedrockNodeTunnel for Linux](https://github.com/NotAlive24/BedrockNodeTunnel)
+
 > [BedrockNodeTunnel for Windows](https://github.com/stonercraft420/BedrockNodeTunnel)
+
 > [BedrockNode Site](https://www.bedrocknode.net/)
 
 The tunnel client is a separate upstream project. On Arch Linux, follow its official release instructions and install its `PKGBUILD` with `makepkg -si`. Then run `nethernet-client` once to complete the browser claim flow and allow it to save its token. In BDS Omni Manager, use **Bedrock Node Tunnel → Start tunnel** to start the installed user service and **Enable at login** if you want systemd to start that service with your user session.
