@@ -3,7 +3,7 @@
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-111111?logo=linux&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-46e59a)
-![Version 2.0.1](https://img.shields.io/badge/release-2.0.1-46e59a)
+![Version 2.0.2](https://img.shields.io/badge/release-2.0.2-46e59a)
 
 **A local-only, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS).** Manage server lifecycle, commands, properties, worlds, Bedrock add-ons, backups, monitoring, scheduled tasks, and the BedrockNodeTunnel Linux user service from one browser interface.
 
@@ -45,10 +45,13 @@ Open the manager's **Settings** page and select the folder containing both `bedr
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
 - [Changelog](CHANGELOG.md)
+- [2.0.2 release notes](docs/releases/RELEASE_NOTES_v2.0.2.md)
 - [2.0.1 release notes](docs/releases/RELEASE_NOTES_v2.0.1.md)
 - [2.0.0 release notes](docs/releases/RELEASE_NOTES_v2.0.0.md)
 
 ---
+
+**Version 2.0.2** — Bedrock manifest comment compatibility: safe parsing of `//` and `/* ... */` comments outside strings, strict-JSON normalization of imported manifests, and JSONC-aware installed-pack inventory.
 
 **Version 2.0.1** — Player tracking reliability and add-on batch import: disconnect parsing for BDS XUID/PFID metadata, per-process player-state isolation, process-exit cleanup, consistent status snapshots, stale-response protection, and multi-file `.mcpack`/`.mcaddon`/ZIP importing with failed-file retry.
 

@@ -1,3 +1,11 @@
+## 2.0.2 — Bedrock Manifest Comment Compatibility
+
+- Fixed `.mcaddon` and `.mcpack` imports for Bedrock manifests containing `//` line comments or `/* ... */` block comments outside JSON strings. The reported Java Saturation V1.6 archive contains a trailing `//` line in both its behavior- and resource-pack manifests, which caused Python's strict JSON parser to reject the bundle as extra data.
+- Added a quote- and escape-aware manifest comment scanner. JSON strings containing `//` or `/* ... */` are preserved; comments are removed without shifting line breaks; all remaining content is still validated by the standard JSON parser. Trailing commas, extra JSON values, malformed content and unterminated block comments remain rejected.
+- Normalize only manifests that contained comments into strict JSON inside the staged import before installation, so BDS receives valid JSON. Other pack files and manifest values are preserved.
+- Apply the same JSONC-aware manifest reading to the installed-pack inventory, so pre-existing commented manifests are not marked invalid by the manager.
+- Added regression tests for the supplied add-on's two-pack structure, both supported comment forms, comment markers inside strings, inventory inspection, strict invalid-tail rejection, and unterminated block-comment rejection.
+
 ## 2.0.1 — Player Tracking Reliability
 
 - Expanded the Mods & Add-ons importer to select and queue multiple `.mcpack`, `.mcaddon`, and supported `.zip` archives in one operation. Each archive is uploaded sequentially and installed using the existing validation and transaction safeguards; failed files remain selected for retry, avoiding duplicate uploads of successful files.

@@ -1,6 +1,6 @@
 # Architecture overview
 
-BDS Omni Manager 2.0.1 is a local Linux application built with Python's standard library and a browser-based single-page interface.
+BDS Omni Manager 2.0.2 is a local Linux application built with Python's standard library and a browser-based single-page interface.
 
 ## Main components
 

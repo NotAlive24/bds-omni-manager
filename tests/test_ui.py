@@ -124,7 +124,7 @@ class UiRegressionTests(unittest.TestCase):
 
     def test_application_version_is_updated(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "2.0.1"', main_source)
+        self.assertIn('APP_VERSION = "2.0.2"', main_source)
 
     def test_content_intelligence_workspace_and_navigation_exist(self):
         for value in (

@@ -30,7 +30,7 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs, unquote, quote
 
 APP_NAME = "BDS Omni Manager"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 HOME = Path.home()
 CONFIG_DIR = HOME / ".config" / "bds-omni-manager"
 STATE_DIR = HOME / ".local" / "state" / "bds-omni-manager"
@@ -1902,6 +1902,80 @@ class Manager:
         return path
 
     @staticmethod
+    def _parse_pack_manifest_text(text: str) -> tuple[dict[str, Any], bool]:
+        """Parse a Bedrock manifest with JSONC comments, preserving JSON rules.
+
+        Bedrock add-ons in the wild commonly include // or /* ... */ comments
+        in manifest.json files. Python's standard JSON decoder rejects those,
+        so remove comments only when they occur outside JSON strings. The
+        resulting text is still parsed by json.loads: trailing commas, extra
+        values, and every other non-JSON construct remain errors.
+
+        Returns the manifest and whether comments were present so imports can
+        write a canonical strict-JSON manifest for BDS to consume.
+        """
+        source = text.removeprefix("\ufeff")
+        chars = list(source)
+        in_string = False
+        escaped = False
+        had_comments = False
+        index = 0
+
+        while index < len(source):
+            char = source[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                index += 1
+                continue
+
+            if char == '"':
+                in_string = True
+                index += 1
+                continue
+
+            if char == "/" and index + 1 < len(source):
+                marker = source[index + 1]
+                if marker == "/":
+                    had_comments = True
+                    chars[index] = chars[index + 1] = " "
+                    index += 2
+                    while index < len(source) and source[index] not in "\r\n":
+                        chars[index] = " "
+                        index += 1
+                    continue
+                if marker == "*":
+                    had_comments = True
+                    start = index
+                    chars[index] = chars[index + 1] = " "
+                    index += 2
+                    closed = False
+                    while index < len(source):
+                        if source[index:index + 2] == "*/":
+                            chars[index] = chars[index + 1] = " "
+                            index += 2
+                            closed = True
+                            break
+                        if source[index] not in "\r\n":
+                            chars[index] = " "
+                        index += 1
+                    if not closed:
+                        line = source.count("\n", 0, start) + 1
+                        raise ValueError(f"manifest.json contains an unterminated block comment on line {line}")
+                    continue
+
+            index += 1
+
+        manifest = json.loads("".join(chars))
+        if not isinstance(manifest, dict):
+            raise ValueError("Pack manifest root must be a JSON object.")
+        return manifest, had_comments
+
+    @staticmethod
     def _version_text(value: Any) -> str:
         # bool is a subclass of int in Python; explicitly reject it so malformed
         # manifest values like [true, 0, 0] cannot pass version validation.
@@ -1938,10 +2012,7 @@ class Manager:
                 try:
                     if manifest_path.stat().st_size > 2_000_000:
                         raise ValueError("manifest.json exceeds the 2 MB inspection limit")
-                    loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-                    if not isinstance(loaded, dict):
-                        raise ValueError("manifest root must be a JSON object")
-                    manifest = loaded
+                    manifest, _ = self._parse_pack_manifest_text(manifest_path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
                     errors.append(f"Invalid manifest: {exc}")
             format_version = manifest.get("format_version") if isinstance(manifest, dict) else None
@@ -2764,8 +2835,10 @@ class Manager:
                 if bad:
                     raise ValueError(f"Pack archive CRC verification failed for {bad}.")
             manifest_path = stage / "manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if not isinstance(manifest, dict) or not isinstance(manifest.get("header"), dict):
+            if manifest_path.stat().st_size > 2_000_000:
+                raise ValueError("manifest.json exceeds the 2 MB inspection limit")
+            manifest, manifest_had_comments = self._parse_pack_manifest_text(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest.get("header"), dict):
                 raise ValueError("Pack manifest must contain a header object.")
             header = manifest["header"]
             format_version = manifest.get("format_version")
@@ -2837,6 +2910,11 @@ class Manager:
                         uuidlib.UUID(str(dependency.get("uuid", "")))
                     except (ValueError, AttributeError) as exc:
                         raise ValueError("Pack dependency UUID is missing or invalid.") from exc
+            if manifest_had_comments:
+                # Keep BDS-facing manifest.json strict JSON even when the source
+                # archive used JSONC comments. Only comments are normalized;
+                # manifest values and all non-manifest pack files are preserved.
+                atomic_write(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
             return {
                 "stage": stage,
                 "kind": kind,
