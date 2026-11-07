@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible problem in BDS Omni Manager.
+title: "bug: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, check existing issues and use the latest release if possible.
+        **Never attach world folders, backups, account tokens, XUIDs, public IPs, or unredacted server logs.**
+  - type: input
+    id: version
+    attributes:
+      label: BDS Omni Manager version
+      description: For example, 2.0.0.
+      placeholder: 2.0.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Linux distribution and version
+      placeholder: Arch Linux (rolling)
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: Python 3.13.x
+    validations:
+      required: true
+  - type: dropdown
+    id: server-state
+    attributes:
+      label: BDS process state
+      options:
+        - Started by BDS Omni Manager
+        - Running externally (systemd, terminal, wrapper, etc.)
+        - Stopped
+        - Not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact UI actions or commands needed to reproduce the issue.
+      placeholder: |
+        1. Open …
+        2. Select …
+        3. Click …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant redacted log excerpt
+      description: Remove tokens, XUIDs, IP addresses, player names and private paths before pasting. Do not upload worlds or backups.
+      render: text
+    validations:
+      required: false
