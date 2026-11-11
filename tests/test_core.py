@@ -1,9 +1,11 @@
 import os
+import io
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 import urllib.error
 import urllib.request
 import zipfile
@@ -577,6 +579,224 @@ class NethernetTunnelTests(unittest.TestCase):
         manager._append_log = lambda *_args, **_kwargs: None
         return manager
 
+    def _service_properties(self, binary="/usr/bin/nethernet-client", active="inactive", extra=""):
+        return {
+            "LoadState": "loaded",
+            "ActiveState": active,
+            "MainPID": "4321" if active == "active" else "0",
+            "WorkingDirectory": str(Path.home()),
+            "FragmentPath": "/usr/lib/systemd/user/bedrocknode-tunnel.service",
+            "ExecStart": f"{{ path={binary} ; argv[]={binary} {extra}; }}",
+        }
+
+    def test_systemd_user_dropin_respects_absolute_xdg_config_home(self):
+        tunnel = bds.NethernetTunnelManager(self._manager())
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            custom = Path(tmp) / "custom-config"
+            home.mkdir()
+            custom.mkdir()
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(custom)}):
+                self.assertEqual(
+                    tunnel._override_path(),
+                    custom / "systemd/user/bedrocknode-tunnel.service.d/90-bds-omni-manager.conf",
+                )
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": "relative-config"}):
+                self.assertEqual(tunnel._override_path(), home / tunnel.OVERRIDE_RELATIVE)
+
+    def test_client_parameter_defaults_match_upstream_help(self):
+        self.assertEqual(bds.NethernetTunnelManager.validate_client_args({}), {
+            "web": "https://bedrocknode.net",
+            "control": "51.222.142.179:7000",
+            "local_http": "127.0.0.1:19132",
+            "local_udp_ip": "",
+            "local_udp_port": 47334,
+        })
+
+    def test_client_parameter_validation_accepts_custom_bedrock_node_arguments(self):
+        args = bds.NethernetTunnelManager.validate_client_args({
+            "web": "https://my-world.bedrocknode.net/",
+            "control": "203.0.113.20:7000",
+            "local_http": "127.0.0.1:19132",
+            "local_udp_ip": "192.168.1.50",
+            "local_udp_port": "48000",
+        })
+        self.assertEqual(args["web"], "https://my-world.bedrocknode.net/")
+        self.assertEqual(args["control"], "203.0.113.20:7000")
+        self.assertEqual(args["local_udp_ip"], "192.168.1.50")
+        self.assertEqual(args["local_udp_port"], 48000)
+
+    def test_client_parameter_validation_requires_bracketed_ipv6_and_valid_ranges(self):
+        with self.assertRaisesRegex(ValueError, r"\[IPv6\]:port"):
+            bds.NethernetTunnelManager.validate_client_args({"local_http": "::1:19132"})
+        valid = bds.NethernetTunnelManager.validate_client_args({"local_http": "[::1]:19132", "local_udp_ip": "2001:db8::5"})
+        self.assertEqual(valid["local_http"], "[::1]:19132")
+        self.assertEqual(valid["local_udp_ip"], "2001:db8::5")
+        for payload in (
+            {"web": "http://remote.example"},
+            {"web": "https://user:pass@example.com"},
+            {"web": "https://<subdomain>.bedrocknode.net/"},
+            {"control": "remote.example:70000"},
+            {"local_http": "127.0.0.1:0"},
+            {"local_udp_ip": "localhost"},
+            {"local_udp_port": 0},
+            {"local_udp_port": 65536},
+            {"local_udp_port": True},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                bds.NethernetTunnelManager.validate_client_args(payload)
+
+    def test_client_settings_write_allowed_flags_to_private_user_dropin(self):
+        manager = self._manager()
+        manager._persist_config = lambda: None
+        log_lines = []
+        manager._append_log = log_lines.append
+        tunnel = bds.NethernetTunnelManager(manager)
+        props = self._service_properties()
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            token_path = home / ".config/bds-omni-manager/nethernet-client.env"
+            payload = {
+                "web": "https://my-world.bedrocknode.net/",
+                "control": "203.0.113.20:7000",
+                "local_http": "127.0.0.1:19133",
+                "local_udp_ip": "192.168.1.50",
+                "local_udp_port": 48000,
+                "token": "PRIVATE_TOKEN_VALUE",
+            }
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", token_path):
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)):
+                    with patch.object(tunnel, "_other_clients", return_value=[]):
+                        with patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"):
+                            with patch.object(tunnel, "_run", return_value=(0, "", "")) as run:
+                                result = tunnel.set_client_settings(payload)
+                override = home / tunnel.OVERRIDE_RELATIVE
+                text = override.read_text(encoding="utf-8")
+                self.assertTrue(result["ok"])
+                self.assertIn("-web=https://my-world.bedrocknode.net/", text)
+                self.assertIn("-control=203.0.113.20:7000", text)
+                self.assertIn("-local-http=127.0.0.1:19133", text)
+                self.assertIn("-local-udp-ip=192.168.1.50", text)
+                self.assertIn("-local-udp-port=48000", text)
+                self.assertIn("-token=${BDS_OMNI_NETHERNET_TOKEN}", text)
+                self.assertNotIn("PRIVATE_TOKEN_VALUE", text)
+                self.assertEqual(token_path.read_text(encoding="ascii"), 'BDS_OMNI_NETHERNET_TOKEN="PRIVATE_TOKEN_VALUE"\n')
+                self.assertEqual(token_path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(token_path.parent.stat().st_mode & 0o777, 0o700)
+                self.assertNotIn("PRIVATE_TOKEN_VALUE", repr(result))
+                self.assertNotIn("PRIVATE_TOKEN_VALUE", repr(manager.config))
+                self.assertNotIn("PRIVATE_TOKEN_VALUE", "\n".join(log_lines))
+                self.assertNotIn("/usr/lib/systemd/user", str(override))
+                self.assertEqual(run.call_args.args[0], ["systemctl", "--user", "daemon-reload"])
+
+    def test_client_settings_preserve_existing_token_and_can_explicitly_clear_it(self):
+        manager = self._manager()
+        manager._persist_config = lambda: None
+        tunnel = bds.NethernetTunnelManager(manager)
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            token_path = home / ".config/bds-omni-manager/nethernet-client.env"
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", token_path):
+                token_path.parent.mkdir(parents=True)
+                token_path.write_text('BDS_OMNI_NETHERNET_TOKEN="KEEP_ME"\n', encoding="ascii")
+                props = self._service_properties()
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)), patch.object(tunnel, "_other_clients", return_value=[]), patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"), patch.object(tunnel, "_run", return_value=(0, "", "")):
+                    tunnel.set_client_settings({})
+                    self.assertIn("KEEP_ME", token_path.read_text(encoding="ascii"))
+                    tunnel.set_client_settings({"clear_token": True})
+                self.assertFalse(token_path.exists())
+                override = (home / tunnel.OVERRIDE_RELATIVE).read_text(encoding="utf-8")
+                self.assertNotIn("-token=", override)
+
+    def test_client_settings_migrate_legacy_token_without_exposing_it(self):
+        manager = self._manager()
+        manager._persist_config = lambda: None
+        manager._append_log = lambda *_args: None
+        tunnel = bds.NethernetTunnelManager(manager)
+        secret = "LEGACY_SECRET_123"
+        props = self._service_properties(extra=f"-token={secret}")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            token_path = home / ".config/bds-omni-manager/nethernet-client.env"
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", token_path):
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)), patch.object(tunnel, "_other_clients", return_value=[]), patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"), patch.object(tunnel, "_run", return_value=(0, "", "")):
+                    result = tunnel.set_client_settings({})
+                override = (home / tunnel.OVERRIDE_RELATIVE).read_text(encoding="utf-8")
+                self.assertIn(secret, token_path.read_text(encoding="ascii"))
+                self.assertNotIn(secret, override)
+                self.assertNotIn(secret, repr(result))
+                self.assertNotIn(secret, repr(manager.config))
+
+    def test_active_client_settings_restart_service_after_dropin_reload(self):
+        manager = self._manager()
+        manager._persist_config = lambda: None
+        tunnel = bds.NethernetTunnelManager(manager)
+        props = self._service_properties(active="active")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", home / ".config/bds-omni-manager/nethernet-client.env"):
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)), patch.object(tunnel, "_other_clients", return_value=[]), patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"), patch.object(tunnel, "_run", return_value=(0, "", "")) as run:
+                    result = tunnel.set_client_settings({"control": "node.example:7000"})
+                self.assertIn("restarted", result["message"])
+                self.assertEqual([call.args[0] for call in run.call_args_list], [
+                    ["systemctl", "--user", "daemon-reload"],
+                    ["systemctl", "--user", "restart", tunnel.UNIT],
+                ])
+
+    def test_reset_token_runs_only_explicit_flag_and_restarts_previous_active_service(self):
+        manager = self._manager()
+        manager.config = {"nethernet_client_args": dict(bds.NethernetTunnelManager.CLIENT_DEFAULTS)}
+        manager._append_log = lambda *_args: None
+        tunnel = bds.NethernetTunnelManager(manager)
+        props = self._service_properties(active="active")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            token_path = home / ".config/bds-omni-manager/nethernet-client.env"
+            token_path.parent.mkdir(parents=True)
+            token_path.write_text('BDS_OMNI_NETHERNET_TOKEN="SECRET"\n', encoding="ascii")
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", token_path):
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)), patch.object(tunnel, "_other_clients", return_value=[]), patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"), patch.object(tunnel, "_run", return_value=(0, "", "")) as systemd_run:
+                    completed = bds.subprocess.CompletedProcess(["/usr/bin/nethernet-client", "-reset-token"], 0, stdout="claim token secret", stderr="")
+                    with patch.object(bds.subprocess, "run", return_value=completed) as reset_run:
+                        result = tunnel.reset_token()
+                self.assertTrue(result["ok"])
+                self.assertEqual(reset_run.call_args.args[0], ["/usr/bin/nethernet-client", "-reset-token"])
+                self.assertFalse(token_path.exists())
+                self.assertNotIn("claim token secret", repr(result))
+                systemd_args = [call.args[0] for call in systemd_run.call_args_list]
+                self.assertEqual(systemd_args[0], ["systemctl", "--user", "stop", tunnel.UNIT])
+                self.assertEqual(systemd_args[1], ["systemctl", "--user", "daemon-reload"])
+                self.assertEqual(systemd_args[2], ["systemctl", "--user", "start", tunnel.UNIT])
+                override = (home / tunnel.OVERRIDE_RELATIVE).read_text(encoding="utf-8")
+                self.assertNotIn("-token=", override)
+
+    def test_reset_token_restarts_active_service_even_if_dropin_update_fails(self):
+        manager = self._manager()
+        manager.config = {"nethernet_client_args": dict(bds.NethernetTunnelManager.CLIENT_DEFAULTS)}
+        manager._append_log = lambda *_args: None
+        tunnel = bds.NethernetTunnelManager(manager)
+        props = self._service_properties(active="active")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            token_path = home / ".config/bds-omni-manager/nethernet-client.env"
+            token_path.parent.mkdir(parents=True)
+            token_path.write_text('BDS_OMNI_NETHERNET_TOKEN="SECRET"\n', encoding="ascii")
+            with patch.object(bds, "HOME", home), patch.dict(bds.os.environ, {"XDG_CONFIG_HOME": str(home / ".config")}), patch.object(bds, "TUNNEL_CLIENT_ENV_FILE", token_path):
+                with patch.object(tunnel, "_unit_properties", return_value=(props, None)), patch.object(tunnel, "_other_clients", return_value=[]), patch.object(tunnel, "_service_binary", return_value="/usr/bin/nethernet-client"), patch.object(tunnel, "_run", return_value=(0, "", "")) as systemd_run:
+                    completed = bds.subprocess.CompletedProcess(["/usr/bin/nethernet-client", "-reset-token"], 0, stdout="", stderr="")
+                    with patch.object(bds.subprocess, "run", return_value=completed), patch.object(tunnel, "_private_write", side_effect=OSError("disk full")):
+                        with self.assertRaisesRegex(ValueError, "could not finish updating"):
+                            tunnel.reset_token()
+                systemd_args = [call.args[0] for call in systemd_run.call_args_list]
+                self.assertEqual(systemd_args[-1], ["systemctl", "--user", "start", tunnel.UNIT])
+
+
     def test_dashboard_property_import_parses_network_settings_without_guessing_values(self):
         snippet = "transport=nethernet\nserver-port=19132\nserver-portv6=19133\nserver-udp-ports=20001-20004\n"
         parsed = bds.parse_bedrock_node_property_lines(snippet)
@@ -902,6 +1122,14 @@ class TunnelHttpIntegrationTests(unittest.TestCase):
                 raise ValueError(f"simulated {action} failure")
             return {"ok": True, "message": f"{action} requested."}
 
+        def set_client_settings(self, data):
+            self.client_settings = dict(data)
+            return {"ok": True, "message": "Client settings saved."}
+
+        def reset_token(self):
+            self.token_reset_called = True
+            return {"ok": True, "message": "Token reset."}
+
     def setUp(self):
         self.manager = self.FakeManager()
         self.tunnel = self.FakeTunnel()
@@ -938,6 +1166,20 @@ class TunnelHttpIntegrationTests(unittest.TestCase):
         except urllib.error.HTTPError as exc:
             with exc:
                 return exc.code, __import__("json").loads(exc.read().decode())
+
+    def test_nethernet_client_parameter_and_token_reset_routes_require_authentication(self):
+        code, _ = self._request("/api/tunnel/client-settings", "POST", {"control": "node.example:7000"}, authenticated=False)
+        self.assertEqual(code, 403)
+        code, result = self._request("/api/tunnel/client-settings", "POST", {"control": "node.example:7000"})
+        self.assertEqual(code, 200)
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.tunnel.client_settings["control"], "node.example:7000")
+        code, _ = self._request("/api/tunnel/token/reset", "POST", {}, authenticated=False)
+        self.assertEqual(code, 403)
+        code, result = self._request("/api/tunnel/token/reset", "POST", {})
+        self.assertEqual(code, 200)
+        self.assertTrue(result["ok"])
+        self.assertTrue(self.tunnel.token_reset_called)
 
     def test_tunnel_state_and_logs_api_require_authentication(self):
         code, _ = self._request("/api/tunnel/state", authenticated=False)
@@ -1073,6 +1315,100 @@ class TunnelHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(manager.validate_property_updates({"server-ip": "::1"}), {"server-ip": "::1"})
         with self.assertRaisesRegex(ValueError, "IPv4/IPv6 literal"):
             manager.validate_property_updates({"server-ip": "not-an-ip"})
+
+
+class MainLifecycleTests(unittest.TestCase):
+    class FakeProcess:
+        @staticmethod
+        def poll():
+            return None
+
+    class FakeHttpServer:
+        def __init__(self, events):
+            self.events = events
+
+        def serve_forever(self, poll_interval=0.5):
+            self.events.append("serve")
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            self.events.append("http-close")
+
+    class FakeTimer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    class FakeManager:
+        def __init__(self, events, backup_error=None, shutdown_error=None):
+            self.events = events
+            self.root = Path("/tmp/fake-bds")
+            self.proc = MainLifecycleTests.FakeProcess()
+            self.tunnel_stop_with_bds = False
+            self.backup_error = backup_error
+            self.shutdown_error = shutdown_error
+
+        def shutdown(self):
+            self.events.append("shutdown")
+            if self.shutdown_error:
+                raise RuntimeError(self.shutdown_error)
+
+        def backup(self, mode):
+            self.events.append(f"backup:{mode}")
+            if self.backup_error:
+                raise ValueError(self.backup_error)
+            return {"ok": True, "backup": {"name": "BDS-final-world.zip"}}
+
+        def stop(self):
+            self.events.append("stop")
+            self.proc = None
+            return {"ok": True}
+
+        def _append_log(self, line):
+            self.events.append("log")
+
+    def _run_main(self, manager):
+        events = manager.events
+        server = self.FakeHttpServer(events)
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(bds, "MANAGER", manager), \
+             patch.object(bds, "ThreadingHTTPServer", return_value=server), \
+             patch.object(bds.threading, "Timer", self.FakeTimer), \
+             patch("webbrowser.open", return_value=True), \
+             redirect_stdout(output), redirect_stderr(errors):
+            bds.main()
+        return events, output.getvalue(), errors.getvalue()
+
+    def test_ctrl_c_backs_up_world_before_stopping_bds_and_closes_http_server(self):
+        events = []
+        manager = self.FakeManager(events)
+        events, output, errors = self._run_main(manager)
+        self.assertLess(events.index("shutdown"), events.index("backup:world"))
+        self.assertLess(events.index("backup:world"), events.index("stop"))
+        self.assertLess(events.index("stop"), events.index("http-close"))
+        self.assertIn("BDS-final-world.zip", output)
+        self.assertNotIn("WARNING", errors)
+
+    def test_ctrl_c_backup_failure_still_stops_bds_and_closes_http_server(self):
+        events = []
+        manager = self.FakeManager(events, backup_error="simulated backup failure")
+        events, output, errors = self._run_main(manager)
+        self.assertIn("backup:world", events)
+        self.assertLess(events.index("backup:world"), events.index("stop"))
+        self.assertLess(events.index("stop"), events.index("http-close"))
+        self.assertIn("simulated backup failure", errors)
+        self.assertIn("stop", events)
+
+    def test_ctrl_c_background_shutdown_failure_does_not_skip_final_backup(self):
+        events = []
+        manager = self.FakeManager(events, shutdown_error="simulated shutdown failure")
+        events, output, errors = self._run_main(manager)
+        self.assertIn("backup:world", events)
+        self.assertLess(events.index("backup:world"), events.index("stop"))
+        self.assertIn("background shutdown reported an issue", errors)
+        self.assertIn("BDS-final-world.zip", output)
 
 
 if __name__ == "__main__":

@@ -71,6 +71,9 @@ class UiRegressionTests(unittest.TestCase):
         for selector in (".player-row,.pack-row,.world-row,.backup-row{", ".avatar{", ".mod-status.valid{", ".mod-status.invalid{", ".stat-value{"):
             self.assertIn(selector, HTML)
         self.assertIn(".weekday-picker input,.schedule-enable input{accent-color:var(--green)", HTML)
+        self.assertIn(".tunnel-client-field input{", HTML)
+        self.assertIn(".tunnel-client-clear input:focus-visible", HTML)
+        self.assertIn(".tunnel-client-actions", HTML)
         self.assertIn(".weekday-picker input:focus-visible,.schedule-enable input:focus-visible", HTML)
         self.assertIn(".schedule-form-grid .weekday-picker input,.schedule-form-grid .schedule-enable input{width:15px", HTML)
 
@@ -124,7 +127,34 @@ class UiRegressionTests(unittest.TestCase):
 
     def test_application_version_is_updated(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "2.0.2"', main_source)
+        self.assertIn('APP_VERSION = "2.0.3"', main_source)
+
+    def test_nethernet_client_parameter_form_has_explicit_controls_and_oled_styles(self):
+        for element_id in (
+            "tunnelClientWeb", "tunnelClientControl", "tunnelClientLocalHttp",
+            "tunnelClientUdpIp", "tunnelClientUdpPort", "tunnelClientToken",
+            "tunnelClientClearToken", "tunnelClientSaveBtn", "tunnelClientResetTokenBtn",
+        ):
+            self.assertIn(f'id="{element_id}"', HTML)
+        for endpoint in ("/api/tunnel/client-settings", "/api/tunnel/token/reset"):
+            self.assertIn(endpoint, HTML)
+        for selector in (
+            ".tunnel-client-grid", ".tunnel-client-field", ".tunnel-client-field input",
+            ".tunnel-client-field input:focus", ".tunnel-client-clear",
+            ".tunnel-client-clear input:focus-visible", ".tunnel-client-actions",
+        ):
+            self.assertIn(selector, HTML)
+        self.assertIn("-reset-token", HTML)
+        self.assertIn("never returned to the UI or logs", HTML)
+        self.assertIn("TOKEN_ENV_SPEC = \"%h/.config/bds-omni-manager/nethernet-client.env\"", (ROOT / "main.py").read_text(encoding="utf-8"))
+
+    def test_ctrl_c_shutdown_creates_world_backup_before_stopping_bds(self):
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        main_body = source[source.rfind("def main() -> None:"):]
+        self.assertLess(main_body.index("MANAGER.shutdown()"), main_body.index('MANAGER.backup("world")'))
+        self.assertLess(main_body.index('MANAGER.backup("world")'), main_body.index("MANAGER.stop()"))
+        self.assertIn("Final world backup created and CRC-verified", main_body)
+        self.assertIn("final world backup failed; continuing shutdown", main_body)
 
     def test_content_intelligence_workspace_and_navigation_exist(self):
         for value in (

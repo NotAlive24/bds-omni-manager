@@ -248,6 +248,24 @@ button:focus:not(:focus-visible){outline:none}
 .tunnel-config-preview .tunnel-no-change{color:#839187}
 .tunnel-config-preview .tunnel-preview-warning{margin-top:8px;color:#d9b66c;font-size:9px;line-height:1.5}
 @media(max-width:560px){.tunnel-config-input{min-height:150px;padding:10px;font-size:10px}.tunnel-import-actions .btn{flex:1 1 130px}.tunnel-config-preview{padding:9px}.tunnel-config-preview th,.tunnel-config-preview td{padding:6px 5px;font-size:9px}}
+/* 2.0.3 — Nethernet client arguments: explicit OLED fields and actions. */
+.tunnel-client-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.tunnel-client-field{display:grid;gap:6px;min-width:0;color:#c5d3c9;font-size:10px;font-weight:750}
+.tunnel-client-field>span{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tunnel-client-field code{color:#77dca5;font:9px ui-monospace,SFMono-Regular,Consolas,monospace}
+.tunnel-client-field small{color:#75847a;font-size:9px;font-weight:500}
+.tunnel-client-field input{display:block;width:100%;min-width:0;min-height:36px;padding:8px 10px;border:1px solid #29372e;border-radius:8px;background:#020403;color:#dce8df;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;outline:none;box-shadow:inset 0 1px 2px #0008;transition:border-color .16s,box-shadow .16s}
+.tunnel-client-field input::placeholder{color:#5b695f;opacity:1}
+.tunnel-client-field input:hover{border-color:#3a5142}
+.tunnel-client-field input:focus{border-color:#36c783;box-shadow:0 0 0 3px #25ca791e}
+.tunnel-client-field input:focus-visible,.tunnel-client-clear input:focus-visible{outline:2px solid #4be49b;outline-offset:2px}
+.tunnel-client-options{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px}
+.tunnel-client-clear{display:inline-flex;align-items:center;gap:8px;color:#c2d0c6;font-size:10px;font-weight:650;cursor:pointer}
+.tunnel-client-clear input{width:15px;height:15px;margin:0;accent-color:#31d58e}
+.tunnel-client-actions{align-items:center}
+.tunnel-client-actions .subtle{min-width:0;overflow-wrap:anywhere}
+.tunnel-client-card .tunnel-help code{color:#b7e6c9;font-size:9px}
+@media(max-width:560px){.tunnel-client-grid{grid-template-columns:1fr;gap:8px}.tunnel-client-field input{min-height:39px}.tunnel-client-actions .btn{flex:1 1 150px}.tunnel-client-options{align-items:flex-start;flex-direction:column}}
 @media(max-width:1050px){.tunnel-layout{grid-template-columns:1fr}.tunnel-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.tunnel-stats{grid-template-columns:1fr 1fr;gap:7px}.tunnel-stat{padding:11px}.tunnel-stat-value{font-size:15px}.tunnel-layout{gap:9px}.tunnel-card{padding:12px}.tunnel-action-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.tunnel-action-grid .btn:last-child{grid-column:1/-1}.tunnel-info-grid,.tunnel-network-grid{gap:6px}.tunnel-info-grid>div,.tunnel-network-grid>div{padding:8px}.tunnel-head-actions{width:100%;justify-content:space-between}.tunnel-page-head{width:100%}}
 
@@ -772,6 +790,29 @@ button:focus:not(:focus-visible){outline:none}
           </div>
         </div>
 
+        <div class="card tunnel-card tunnel-client-card">
+          <div class="section-title"><h2>nethernet-client parameters</h2><span>Applied through a systemd user override</span></div>
+          <p class="tunnel-help tunnel-import-intro">Configure the documented client flags here. Saving writes a user-level systemd drop-in (respecting <code>XDG_CONFIG_HOME</code>); the upstream package unit in <code>/usr/lib</code> is never edited.</p>
+          <div class="tunnel-client-grid">
+            <label class="tunnel-client-field"><span>Web dashboard URL <code>-web</code></span><input id="tunnelClientWeb" type="url" spellcheck="false" value="https://bedrocknode.net" placeholder="https://your-subdomain.bedrocknode.net/" autocomplete="url"></label>
+            <label class="tunnel-client-field"><span>Control address <code>-control</code></span><input id="tunnelClientControl" type="text" spellcheck="false" value="51.222.142.179:7000" placeholder="region-ip:7000" autocomplete="off"></label>
+            <label class="tunnel-client-field"><span>Local TCP target <code>-local-http</code></span><input id="tunnelClientLocalHttp" type="text" spellcheck="false" value="127.0.0.1:19132" placeholder="127.0.0.1:19132" autocomplete="off"></label>
+            <label class="tunnel-client-field"><span>Local UDP IP <code>-local-udp-ip</code></span><input id="tunnelClientUdpIp" type="text" spellcheck="false" placeholder="Blank = auto-detect" autocomplete="off"></label>
+            <label class="tunnel-client-field"><span>Local UDP port <code>-local-udp-port</code></span><input id="tunnelClientUdpPort" type="number" min="1" max="65535" step="1" value="47334" inputmode="numeric"></label>
+            <label class="tunnel-client-field"><span>Custom token <code>-token</code> <small>(optional)</small></span><input id="tunnelClientToken" type="password" spellcheck="false" placeholder="Leave blank to keep the saved token" autocomplete="new-password"></label>
+          </div>
+          <div class="tunnel-client-options">
+            <label class="tunnel-client-clear"><input id="tunnelClientClearToken" type="checkbox"><span>Clear custom token override</span></label>
+            <span class="subtle" id="tunnelClientTokenState">Token is never displayed by the manager.</span>
+          </div>
+          <div class="tunnel-import-actions tunnel-client-actions">
+            <button class="btn primary" id="tunnelClientSaveBtn" type="button" onclick="saveTunnelClientSettings()">Save &amp; apply parameters</button>
+            <button class="btn danger" id="tunnelClientResetTokenBtn" type="button" onclick="resetTunnelToken()">Reset saved token</button>
+            <span class="subtle" id="tunnelClientSettingsNote">Values shown are the current service arguments.</span>
+          </div>
+          <p class="tunnel-help">The manager runs <code>-version</code> automatically for the version display. <code>-reset-token</code> is a one-time action above, not a persistent startup flag. Custom tokens are kept in an owner-only file and are never returned to the UI or logs.</p>
+        </div>
+
         <div class="card tunnel-card">
           <div class="section-title"><h2>Connectivity diagnostics</h2><span>Read-only checks</span></div>
           <div id="tunnelDiagnostics" class="tunnel-diagnostics"><div class="empty">Run a tunnel refresh to check the client, systemd unit and BDS network configuration.</div></div>
@@ -811,7 +852,7 @@ button:focus:not(:focus-visible){outline:none}
           <label class="tunnel-toggle" for="tunnelStartWithBds"><span><strong>Start tunnel when BDS starts</strong><small>Request the systemd tunnel service after the manager starts BDS.</small></span><input type="checkbox" id="tunnelStartWithBds"></label>
           <label class="tunnel-toggle" for="tunnelStopWithBds"><span><strong>Stop tunnel when BDS stops</strong><small>Stop the tunnel when you stop BDS or exit this manager.</small></span><input type="checkbox" id="tunnelStopWithBds"></label>
           <div class="form-actions"><button class="btn primary" type="button" onclick="saveTunnelSettings()">Save integration settings</button><span id="tunnelSettingsNote" class="subtle">Both options are off by default.</span></div>
-          <div class="notice info tunnel-inline-notice">These options affect only the documented <code>systemd --user</code> unit. The manager does not change the tunnel token or rewrite the upstream service file.</div>
+          <div class="notice info tunnel-inline-notice">These options affect only the documented <code>systemd --user</code> unit. Client arguments are stored in a manager-owned user drop-in; the upstream vendor service file remains untouched.</div>
         </div>
 
         <div class="card tunnel-card tunnel-log-card">
@@ -824,14 +865,14 @@ button:focus:not(:focus-visible){outline:none}
           <div class="section-title"><h2>First-time setup</h2><span>Upstream instructions</span></div>
           <ol class="tunnel-steps">
             <li>Install the BedrockNodeTunnel Arch package using the upstream release's <code>PKGBUILD</code>.</li>
-            <li>Run <code>nethernet-client</code> once and complete the claim link or code printed in its output. The upstream client stores the token itself.</li>
+            <li>Set the <code>-web</code> and <code>-control</code> values in the client-parameters card, then start the tunnel and complete the browser claim if requested.</li>
             <li>Use <strong>Start tunnel</strong> above. Use <strong>Enable at login</strong> separately if you want systemd to start the tunnel with your user session.</li>
             <li>Copy the exact four BDS networking settings from your Bedrock Node dashboard, paste them into the import box, review, apply, and restart BDS.</li>
             <li>Give players the public IP and port shown in your Bedrock Node dashboard. That public port can differ from the local BDS <code>server-port</code>.</li>
           </ol>
           <div class="tunnel-note">Optional: <code>loginctl enable-linger "$USER"</code> keeps your systemd user services available across logout and before login. This does not make the manager-owned BDS process a boot service.</div>
           <div class="tunnel-links"><a href="https://github.com/NotAlive24/BedrockNodeTunnel" target="_blank" rel="noopener noreferrer">Upstream GitHub documentation ↗</a><a href="https://bedrocknode.net/" target="_blank" rel="noopener noreferrer">Bedrock Node dashboard ↗</a></div>
-          <p class="tunnel-help">The manager never downloads or replaces the tunnel binary, reads the token contents, or resets your account claim.</p>
+          <p class="tunnel-help">The manager never downloads or replaces the tunnel binary. Token contents are never shown; token reset only runs after you explicitly confirm the action.</p>
         </div>
       </div>
     </div>
@@ -1035,7 +1076,7 @@ let appState=null, logCursor=0, accessData={allowlist:[],permissions:[]}, access
 let worldCache=[], packCache={behavior:[],resource:[]}, selectedWorld='', worldActionMode='', worldActionSource='';
 let modsCache=[], modsWorlds=[], modsLoadRunning=false;
 let contentLabData=null, contentProfileCache=[], contentLabLoading=false, contentLabWorlds=[], contentLabRequestId=0, contentLabMutationRunning=false, contentLabActionRunning=false;
-let tunnelState=null, tunnelLoadRunning=false, tunnelSettingsDirty=false;
+let tunnelState=null, tunnelLoadRunning=false, tunnelSettingsDirty=false, tunnelClientSettingsDirty=false;
 const CONFIG_INPUT_IDS=['serverDirInput','backupDir','autoBackupHours','backupKeep'];
 const dirtyConfigInputs=new Set();
 const configDrafts=new Map();
@@ -1222,6 +1263,8 @@ const gamerules=['commandblockoutput','dodaylightcycle','doentitydrops','dofiret
 async function playerAction(cmd){const t=val('playerTarget').trim();if(!t)return toast('Enter a player name or target selector.',true);sendCommandFrom(cmd+' '+t)}function kickPlayer(){const t=val('playerTarget').trim(),r=val('kickReason').trim();if(!t)return toast('Enter a player name.',true);sendCommandFrom('kick '+t+(r?' '+r:''))}
 function tunnelHealthClass(health){return health==='connected'?'green':health==='reconnecting'||health==='local_unreachable'||health==='claim_required'?'warning':''}
 function renderTunnelState(d){tunnelState=d;if(!d)return;const badge=$('tunnelHealthBadge');badge.className='pill '+tunnelHealthClass(d.health);badge.textContent=d.health_label||'Unknown';$('tunnelHealthValue').textContent=d.health_label||'Unknown';$('tunnelHealthSub').textContent=d.last_event||'No client event available';$('tunnelClientVersion').textContent=d.client?.version||'Unknown';$('tunnelClientPath').textContent=(d.client?.path||'nethernet-client not found')+(d.client?.version_source?' · '+d.client.version_source:'');$('tunnelServiceState').textContent=d.service_installed?(d.active?'Active':'Installed'):'Not installed';$('tunnelServiceSub').textContent=d.unit_file_state||d.unit;$('tunnelTcpTarget').textContent=d.target?.tcp||'—';$('tunnelTcpReachable').textContent=d.target?.tcp_reachable===true?'TCP connection succeeds':d.target?.tcp_reachable===false?'TCP connection refused / timed out':'Target could not be checked';$('tunnelActiveState').textContent=(d.active_state||'unknown')+(d.sub_state?' · '+d.sub_state:'');$('tunnelEnabledState').textContent=d.enabled?'Enabled':'Disabled';$('tunnelPid').textContent=d.pid&&d.pid!=='0'?d.pid:'—';$('tunnelRestarts').textContent=d.restarts??'—';$('tunnelUdpTarget').textContent=(d.target?.udp_ip||'Auto-detected')+':'+(d.target?.udp_port||47334);$('tunnelBdsTransport').textContent=d.bds?.transport||'—';$('tunnelBdsBind').textContent=d.bds?.server_ip||'All interfaces (default)';$('tunnelBdsPort').textContent=d.bds?.server_port??'—';$('tunnelBdsUdpState').textContent=d.bds?.udp_mapping_configured?'Configured':'Not configured';$('tunnelBdsMaxPlayers').textContent=d.bds?.max_players||'—';$('tunnelBdsUdpValue').textContent=d.bds?.udp_mapping||'No server-udp-ports value detected. Check the exact settings supplied by the Bedrock Node dashboard.';$('tunnelUnitLabel').textContent=d.unit||'bedrocknode-tunnel.service';$('tunnelServiceNote').textContent=d.service_installed?(d.fragment_path?'Unit: '+d.fragment_path:'The upstream user service is installed. Service controls use systemctl --user.'):(d.systemd_error||'The bedrocknode-tunnel user service was not found. Install it using the upstream Arch package instructions.');const externalClientCount=Array.isArray(d.external_clients)?d.external_clients.length:0;if(externalClientCount){$('tunnelServiceNote').textContent+=' Stop the separate foreground client before starting or restarting this service.';}$('tunnelStartBtn').disabled=!d.service_installed||d.active||externalClientCount>0;$('tunnelStopBtn').disabled=!d.service_installed||!d.active;$('tunnelRestartBtn').disabled=!d.service_installed||externalClientCount>0;$('tunnelEnableBtn').disabled=!d.service_installed||d.enabled;$('tunnelDisableBtn').disabled=!d.service_installed||!d.enabled;
+  if(!tunnelClientSettingsDirty){const a=d.client_args||{};$('tunnelClientWeb').value=a.web||'https://bedrocknode.net';$('tunnelClientControl').value=a.control||'51.222.142.179:7000';$('tunnelClientLocalHttp').value=a.local_http||'127.0.0.1:19132';$('tunnelClientUdpIp').value=a.local_udp_ip||'';$('tunnelClientUdpPort').value=String(a.local_udp_port||47334);$('tunnelClientToken').value='';$('tunnelClientClearToken').checked=false;$('tunnelClientTokenState').textContent=d.token?.configured?'A token is configured; its value is hidden.':'No custom token override is configured.';$('tunnelClientSettingsNote').textContent='Current systemd client arguments';}
+  $('tunnelClientSaveBtn').disabled=!d.service_installed||((d.external_clients||[]).length>0);$('tunnelClientResetTokenBtn').disabled=!d.client?.installed||((d.external_clients||[]).length>0);
   $('tunnelDiagnostics').innerHTML=(d.diagnostics||[]).map(x=>`<div class="tunnel-diagnostic ${esc(x.level)}"><span class="tunnel-diagnostic-dot" aria-hidden="true"></span><div><strong>${esc(x.title)}</strong><p>${esc(x.detail)}</p></div></div>`).join('')||'<div class="empty">No diagnostics were returned.</div>';
   if(!tunnelSettingsDirty){$('tunnelStartWithBds').checked=!!d.integration?.start_with_bds;$('tunnelStopWithBds').checked=!!d.integration?.stop_with_bds}
   $('tunnelStartWithBds').onchange=()=>{tunnelSettingsDirty=true;$('tunnelSettingsNote').textContent='Unsaved changes';};$('tunnelStopWithBds').onchange=()=>{tunnelSettingsDirty=true;$('tunnelSettingsNote').textContent='Unsaved changes';};$('tunnelSettingsNote').textContent=tunnelSettingsDirty?'Unsaved changes':'Lifecycle integration settings';
@@ -1230,6 +1273,10 @@ async function loadTunnelLogs(){try{const d=await api('/api/tunnel/logs');$('tun
 async function loadTunnel(){if(tunnelLoadRunning)return;tunnelLoadRunning=true;$('tunnelHealthSub').textContent='Checking systemd service, client version and BDS ports…';try{const [state,logs]=await Promise.all([api('/api/tunnel/state'),api('/api/tunnel/logs')]);renderTunnelState(state);$('tunnelLogs').textContent=logs.lines?.length?logs.lines.join('\n'):'No journal entries were returned. The service may not be installed, may not have started, or user journal persistence may be unavailable.'}catch(e){$('tunnelHealthBadge').textContent='Unable to check';$('tunnelHealthBadge').className='pill warning';$('tunnelHealthSub').textContent=e.message;$('tunnelDiagnostics').innerHTML=`<div class="tunnel-diagnostic error"><span class="tunnel-diagnostic-dot"></span><div><strong>Tunnel status request failed</strong><p>${esc(e.message)}</p></div></div>`}finally{tunnelLoadRunning=false}}
 async function tunnelAction(action){const prompts={stop:['Stop Bedrock Node Tunnel?','Players will no longer be able to reach this server through this tunnel.','Stop tunnel'],restart:['Restart Bedrock Node Tunnel?','The client will disconnect briefly and then attempt to reconnect.','Restart tunnel'],disable:['Disable tunnel at login?','The tunnel will no longer start automatically with your user session.','Disable at login']};if(prompts[action]){const [title,body,label]=prompts[action];if(!await ask(title,body,label))return}try{const r=await api('/api/tunnel/action','POST',{action});toast(r.message||'Tunnel action completed.');await loadTunnel()}catch(e){toast(e.message,true)}}
 async function saveTunnelSettings(){try{const r=await api('/api/tunnel/settings','POST',{start_with_bds:$('tunnelStartWithBds').checked,stop_with_bds:$('tunnelStopWithBds').checked});tunnelSettingsDirty=false;toast(r.message);await loadTunnel()}catch(e){toast(e.message,true)}}
+function markTunnelClientSettingsDirty(){tunnelClientSettingsDirty=true;$('tunnelClientSettingsNote').textContent='Unsaved parameter changes';}
+['tunnelClientWeb','tunnelClientControl','tunnelClientLocalHttp','tunnelClientUdpIp','tunnelClientUdpPort','tunnelClientToken','tunnelClientClearToken'].forEach(id=>$(id).addEventListener('input',markTunnelClientSettingsDirty));
+async function saveTunnelClientSettings(){const payload={web:$('tunnelClientWeb').value,control:$('tunnelClientControl').value,local_http:$('tunnelClientLocalHttp').value,local_udp_ip:$('tunnelClientUdpIp').value,local_udp_port:Number($('tunnelClientUdpPort').value),clear_token:$('tunnelClientClearToken').checked};const token=$('tunnelClientToken').value;if(token)payload.token=token;const btn=$('tunnelClientSaveBtn');btn.disabled=true;try{const result=await api('/api/tunnel/client-settings','POST',payload);tunnelClientSettingsDirty=false;$('tunnelClientToken').value='';$('tunnelClientClearToken').checked=false;toast(result.message);await loadTunnel()}catch(e){toast(e.message,true)}finally{btn.disabled=false}}
+async function resetTunnelToken(){if(!await ask('Reset saved Bedrock Node token?','This runs nethernet-client -reset-token, removes the manager’s custom token override, and requests a fresh browser claim. The active tunnel will be stopped and started again if it was running.','Reset token'))return;const btn=$('tunnelClientResetTokenBtn');btn.disabled=true;try{const result=await api('/api/tunnel/token/reset','POST',{});tunnelClientSettingsDirty=false;$('tunnelClientToken').value='';$('tunnelClientClearToken').checked=false;toast(result.message);await loadTunnel()}catch(e){toast(e.message,true)}finally{btn.disabled=false}}
 let tunnelConfigPreviewData=null,tunnelConfigRequestId=0;
 function clearTunnelConfigImport(){tunnelConfigRequestId++;tunnelConfigPreviewData=null;$('tunnelConfigText').value='';$('tunnelConfigPreview').hidden=true;$('tunnelConfigPreview').innerHTML='';$('tunnelConfigApplyBtn').disabled=true;$('tunnelConfigPreviewBtn').disabled=false}
 function renderTunnelConfigPreview(d){const target=$('tunnelConfigPreview');const changes=d.changes||[];const rows=changes.map(item=>`<tr><td><code>${esc(item.key)}</code></td><td>${esc(item.current)}</td><td>${esc(item.new)}</td><td>${item.changed?'Change':'<span class="tunnel-no-change">No change</span>'}</td></tr>`).join('');target.innerHTML=`<h3>Review ${changes.length} networking ${changes.length===1?'setting':'settings'}</h3><table><thead><tr><th>Property</th><th>Current</th><th>Dashboard value</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table><p class="tunnel-preview-warning">${d.restart_required?'BDS is running. Restart it after importing these startup settings.':'The settings will be written to server.properties. Review every value before applying.'}</p>`;target.hidden=false}

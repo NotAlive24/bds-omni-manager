@@ -1,3 +1,13 @@
+## 2.0.3 — Nethernet Client Parameters and Safe Ctrl+C Backup
+
+- Added a dedicated Bedrock Node Tunnel parameter editor for every documented persistent `nethernet-client` setting: `-web`, `-control`, `-local-http`, `-local-udp-ip`, `-local-udp-port`, and an optional custom `-token`. The UI uses structured fields rather than a shell command; endpoint, IP, URL, and port values are validated before saving.
+- Apply settings through a manager-owned systemd user drop-in under the active XDG systemd configuration directory. The upstream package unit is never edited. A running tunnel is restarted after a successful save so the new arguments take effect.
+- Store a custom token separately in the manager's private config directory with mode `0600` and a private parent directory; never return or log token contents. Blank token input keeps the existing token, explicit clearing removes it, and `-reset-token` runs only through a separate confirmation action.
+- Preserve and safely migrate a legacy `-token` value from an existing service ExecStart when settings are first managed. Configuration writes, token migration, systemd reload, and active-service restart use rollback on failure.
+- Changed Ctrl+C shutdown to quiesce background tasks, create a final world backup while the managed BDS process is still running, and only then stop the tunnel (when linked) and managed BDS process. The existing backup path uses BDS `save hold`/`save resume` and CRC verification. If the final backup fails, the error is reported and the managed process is still stopped rather than leaving it running unexpectedly.
+- Added regression tests for all documented client arguments, URL/endpoint/IP/port validation, token privacy and migration, reset-token recovery, XDG systemd drop-ins, and Ctrl+C backup ordering and failure paths.
+- Added responsive OLED styling and browser interaction coverage for the new tunnel parameter form.
+
 ## 2.0.2 — Bedrock Manifest Comment Compatibility
 
 - Fixed `.mcaddon` and `.mcpack` imports for Bedrock manifests containing `//` line comments or `/* ... */` block comments outside JSON strings. The reported Java Saturation V1.6 archive contains a trailing `//` line in both its behavior- and resource-pack manifests, which caused Python's strict JSON parser to reject the bundle as extra data.

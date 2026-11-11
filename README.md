@@ -3,7 +3,7 @@
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/platform-Linux-111111?logo=linux&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-46e59a)
-![Version 2.0.2](https://img.shields.io/badge/release-2.0.2-46e59a)
+![Version 2.0.3](https://img.shields.io/badge/release-2.0.3-46e59a)
 
 **A local-only, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS).** Manage server lifecycle, commands, properties, worlds, Bedrock add-ons, backups, monitoring, scheduled tasks, and the BedrockNodeTunnel Linux user service from one browser interface.
 
@@ -45,11 +45,14 @@ Open the manager's **Settings** page and select the folder containing both `bedr
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
 - [Changelog](CHANGELOG.md)
+- [2.0.3 release notes](docs/releases/RELEASE_NOTES_v2.0.3.md)
 - [2.0.2 release notes](docs/releases/RELEASE_NOTES_v2.0.2.md)
 - [2.0.1 release notes](docs/releases/RELEASE_NOTES_v2.0.1.md)
 - [2.0.0 release notes](docs/releases/RELEASE_NOTES_v2.0.0.md)
 
 ---
+
+**Version 2.0.3** — Nethernet Client Parameters and safe Ctrl+C backup: configure all documented `nethernet-client` flags through validated structured fields, store custom tokens privately, apply settings through a systemd user drop-in, and create a verified final world backup before stopping managed BDS on Ctrl+C.
 
 **Version 2.0.2** — Bedrock manifest comment compatibility: safe parsing of `//` and `/* ... */` comments outside strings, strict-JSON normalization of imported manifests, and JSONC-aware installed-pack inventory.
 
@@ -70,6 +73,14 @@ Open the manager's **Settings** page and select the folder containing both `bedr
 **Version 1.3.1** — HTTP browser-disconnect handling, preserving the 1.3.0 interface and path-editor fixes.
 
 A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS), designed for Linux/Arch Linux.
+
+## What's new in 2.0.3 — Nethernet Client Parameters and safe shutdown
+
+- **Documented client parameters:** configure `-web`, `-control`, `-local-http`, `-local-udp-ip`, and `-local-udp-port` directly from the Bedrock Node Tunnel page. Example values such as `https://<subdomain>.bedrocknode.net/` and `<region-ip>:7000` belong in their respective fields; do not paste a whole command line.
+- **Custom token handling:** optionally provide a custom `-token`, keep the saved token by leaving the field blank, clear it with the explicit clear option, or use the separate confirmed Reset token action to invoke `-reset-token`. Token contents are never shown in status responses or application logs.
+- **Systemd integration:** settings are installed as a manager-owned user-service drop-in, respecting `XDG_CONFIG_HOME`; the vendor unit under `/usr/lib` remains untouched. Saving restarts an active tunnel to apply the new arguments.
+- **Ctrl+C final backup:** interrupting the manager waits for active backup work, takes a final CRC-verified world backup using the managed BDS process, then stops the linked tunnel and managed server. External/unmanaged BDS processes are not stopped by this action.
+- **Limits:** `-version` is read-only and used for client discovery. `-reset-token` is not stored as a persistent argument; it remains an explicit one-time action.
 
 ## What's new in 2.0.0 — Content Intelligence
 
@@ -123,7 +134,7 @@ A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS)
 - **Scheduled tasks:** create, edit, pause/resume, and delete up to 40 tasks. Supported task types are world backups, full-server backups, and in-game `say` announcements. Choose a local 24-hour time and one or more weekdays.
 - **Run history:** record success/failure, start and finish times, and a concise result for the latest 50 task runs. Task definitions and history are stored separately from the manager's main configuration at `~/.local/state/bds-omni-manager/scheduled_jobs.json`.
 - **Missed-run policy:** tasks execute only while BDS Omni Manager is running and only within 150 seconds of the configured local time on a selected weekday. Missed tasks are skipped; they are not replayed after the machine sleeps, the manager is closed, or the system reboots. Times use the host's local timezone.
-- **Safe live-backup shutdown:** when the manager exits, it stops scheduling new tasks and waits for active scheduled/automatic backup work to finish and release BDS `save hold` with `save resume` before asking its managed BDS process to stop. This can make shutdown take as long as an in-progress backup.
+- **Safe live-backup shutdown:** when the manager exits, it stops scheduling new tasks and waits for active scheduled/automatic backup work to finish and release BDS `save hold` with `save resume` before asking its managed BDS process to stop. Pressing Ctrl+C additionally triggers a final world backup while the managed BDS process is still running; the tunnel (when linked) and managed BDS are stopped afterward. Backup failure is reported explicitly, but does not leave a managed server running indefinitely.
 - **Scope and limitations:** host CPU/memory/network include activity from other applications and services. BDS process metrics are available only for a process launched by this manager. The UI does not claim a TPS value because BDS does not expose a reliable universal TPS metric through this manager's current interface. Announcement tasks require a running BDS process managed by this application; backup operations retain the existing backup safety checks and can fail rather than copy a live world unsafely.
 - **AMOLED UI:** explicit styles for metric cards, charts, health rows, schedule form controls, weekday toggles, status indicators, empty states, and mobile layouts. Monitoring polls only while its page is active and the browser tab is visible.
 - **Security:** monitoring and schedule APIs use the same per-launch local API token as the rest of the manager. Scheduled task types are allow-listed; the scheduler does not execute arbitrary shell commands.
@@ -134,8 +145,9 @@ A local, AMOLED-black control panel for Minecraft Bedrock Dedicated Server (BDS)
 
 - **Upstream service control:** detect and manage the documented `bedrocknode-tunnel.service` systemd user unit with Start, Stop, Restart, Enable at login, and Disable at login actions. The manager does not install, replace, or edit the upstream unit.
 - **Client discovery and version:** detect `nethernet-client`, prefer the exact executable path reported by the service's `ExecStart`, and run only its documented `-version` flag. The version source is shown in status data.
+- **Parameter editor (2.0.3):** set the documented web dashboard URL, VPS control address, local TCP target, local UDP IP, local UDP port, and optional custom token through validated controls. Saved values are passed as fixed documented flags through a manager-owned systemd user drop-in; the vendor unit is not modified.
 - **Connection health, not just process health:** distinguish a running service from an authenticated tunnel. Connection events are read only from the current systemd `InvocationID`; when the current invocation cannot be identified, the manager refuses to infer “connected” from historical journal lines.
-- **Safe token checks:** detect the upstream token file in the XDG config location and relevant service working-directory fallback locations, and report file permissions. Token contents and `-token` command-line values are never read, returned, or logged by this manager.
+- **Safe token checks:** detect the upstream token file in the XDG config location and relevant service working-directory fallback locations, and report file permissions. Token contents and `-token` command-line values are never read, returned, or logged by this manager. When the manager manages an explicit custom token, it stores it in a separate `0600` EnvironmentFile under its private config directory; the browser only receives a boolean token-presence indicator.
 - **Repeated UDP mapping editor:** `server-udp-ports` uses a dedicated dark multiline editor. Each mapping remains on its own `server-udp-ports=` line through reload, edit, save, backup, and Bedrock Node import. Up to 32 entries are accepted per save/import; blank lines are ignored. Other duplicate properties remain rejected by the dashboard importer. The manager preserves the mapping text exactly instead of trying to reinterpret ranges or public/local port pairs, because behavior varies by BDS build. Mojang's issue tracker has an **unconfirmed** report documenting separate repeated rows as a workaround on affected builds: [BDS-23126](https://bugs.mojang.com/browse/BDS-23126). Check the `bedrock_server_how_to.html` bundled with your exact BDS version before changing live mappings.
 - **Networking diagnostics:** show the configured local TCP target, local UDP target, BDS `transport`, bind address, TCP port, UDP mapping presence, and a local TCP reachability probe. The panel does not invent the account-specific public endpoint or UDP mappings.
 - **Reviewed networking import:** paste the exact network-related `key=value` lines from the Bedrock Node dashboard, preview the property diff, and explicitly apply it. Unrelated properties, duplicate scalar keys, malformed values, and non-NetherNet transport are rejected. Repeated `server-udp-ports` entries are preserved as separate mappings rather than collapsed into one value.

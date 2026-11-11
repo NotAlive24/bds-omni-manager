@@ -30,11 +30,12 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs, unquote, quote
 
 APP_NAME = "BDS Omni Manager"
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 HOME = Path.home()
 CONFIG_DIR = HOME / ".config" / "bds-omni-manager"
 STATE_DIR = HOME / ".local" / "state" / "bds-omni-manager"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+TUNNEL_CLIENT_ENV_FILE = CONFIG_DIR / "nethernet-client.env"
 LOG_FILE = STATE_DIR / "manager.log"
 SCHEDULE_FILE = STATE_DIR / "scheduled_jobs.json"
 STACK_PROFILE_FILE = STATE_DIR / "world_pack_profiles.json"
@@ -4363,6 +4364,17 @@ class NethernetTunnelManager:
     ACTIONS = {"start", "stop", "restart", "enable", "disable"}
     PROC_ROOT = Path("/proc")
 
+    CLIENT_DEFAULTS = {
+        "web": "https://bedrocknode.net",
+        "control": "51.222.142.179:7000",
+        "local_http": "127.0.0.1:19132",
+        "local_udp_ip": "",
+        "local_udp_port": 47334,
+    }
+    OVERRIDE_RELATIVE = Path(".config/systemd/user/bedrocknode-tunnel.service.d/90-bds-omni-manager.conf")
+    TOKEN_ENV_SPEC = "%h/.config/bds-omni-manager/nethernet-client.env"
+    TOKEN_ENV_NAME = "BDS_OMNI_NETHERNET_TOKEN"
+
     def __init__(self, manager: Manager) -> None:
         self.manager = manager
 
@@ -4411,10 +4423,342 @@ class NethernetTunnelManager:
         return result
 
     @staticmethod
+    def _valid_endpoint_host(host: str) -> bool:
+        if not host or any(ch.isspace() or ord(ch) < 33 for ch in host):
+            return False
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            if len(host) > 253 or host.startswith(".") or host.endswith("."):
+                return False
+            labels = host.split(".")
+            return all(
+                label and len(label) <= 63
+                and re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label)
+                for label in labels
+            )
+
+    @classmethod
+    def _validate_endpoint(cls, value: Any, label: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be text in host:port format.")
+        value = value.strip()
+        parsed = cls._split_host_port(value)
+        if not parsed or not cls._valid_endpoint_host(parsed[0]):
+            raise ValueError(f"{label} must be a valid host:port address (IPv6 must be bracketed).")
+        if ":" in parsed[0] and not value.startswith("["):
+            raise ValueError(f"{label} must use [IPv6]:port notation for IPv6 addresses.")
+        return value
+
+    @classmethod
+    def _validate_web_url(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Web dashboard URL must be text.")
+        value = value.strip()
+        if not value or len(value) > 2048 or any(ch.isspace() or ord(ch) < 32 for ch in value):
+            raise ValueError("Web dashboard URL must be a non-empty URL without whitespace (maximum 2048 characters).")
+        if any(ch in value for ch in ('"', "'", "\\", "$", "`")):
+            raise ValueError("Web dashboard URL contains characters that systemd cannot safely pass as one argument.")
+        try:
+            parsed = urlparse(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Web dashboard URL has an invalid port or authority.") from exc
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError("Web dashboard URL must be an absolute HTTPS URL (HTTP is allowed only for localhost).")
+        if not cls._valid_endpoint_host(parsed.hostname):
+            raise ValueError("Web dashboard URL must contain a valid hostname or IP address.")
+        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("Use HTTPS for a non-local Bedrock Node dashboard URL.")
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("Web dashboard URL port must be between 1 and 65535.")
+        return value
+
+    @classmethod
+    def validate_client_args(cls, data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError("Nethernet client parameters must be an object.")
+        web = cls._validate_web_url(data.get("web", cls.CLIENT_DEFAULTS["web"]))
+        control = cls._validate_endpoint(data.get("control", cls.CLIENT_DEFAULTS["control"]), "Control address")
+        local_http = cls._validate_endpoint(data.get("local_http", cls.CLIENT_DEFAULTS["local_http"]), "Local TCP target")
+        udp_ip = data.get("local_udp_ip", cls.CLIENT_DEFAULTS["local_udp_ip"])
+        if not isinstance(udp_ip, str):
+            raise ValueError("Local UDP IP must be an IPv4/IPv6 address or blank for auto-detection.")
+        udp_ip = udp_ip.strip()
+        if udp_ip:
+            try:
+                ipaddress.ip_address(udp_ip)
+            except ValueError as exc:
+                raise ValueError("Local UDP IP must be a valid IPv4/IPv6 address, or blank for auto-detection.") from exc
+        udp_port = data.get("local_udp_port", cls.CLIENT_DEFAULTS["local_udp_port"])
+        if isinstance(udp_port, bool):
+            raise ValueError("Local UDP port must be an integer between 1 and 65535.")
+        try:
+            udp_port = int(udp_port)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Local UDP port must be an integer between 1 and 65535.") from exc
+        if not 1 <= udp_port <= 65535:
+            raise ValueError("Local UDP port must be between 1 and 65535.")
+        return {"web": web, "control": control, "local_http": local_http, "local_udp_ip": udp_ip, "local_udp_port": udp_port}
+
+    def client_args(self, exec_start: str = "") -> dict[str, Any]:
+        saved = self.manager.config.get("nethernet_client_args") if isinstance(getattr(self.manager, "config", None), dict) else None
+        if isinstance(saved, dict):
+            candidate = {key: saved.get(key, default) for key, default in self.CLIENT_DEFAULTS.items()}
+        else:
+            candidate = {
+                "web": self._extract_flag(exec_start, "web", self.CLIENT_DEFAULTS["web"]),
+                "control": self._extract_flag(exec_start, "control", self.CLIENT_DEFAULTS["control"]),
+                "local_http": self._extract_flag(exec_start, "local-http", self.CLIENT_DEFAULTS["local_http"]),
+                "local_udp_ip": self._extract_flag(exec_start, "local-udp-ip", self.CLIENT_DEFAULTS["local_udp_ip"]),
+                "local_udp_port": self._extract_flag(exec_start, "local-udp-port", str(self.CLIENT_DEFAULTS["local_udp_port"])),
+            }
+        try:
+            return self.validate_client_args(candidate)
+        except ValueError:
+            # A malformed old unit must not break the read-only status view.
+            return dict(self.CLIENT_DEFAULTS)
+
+    @staticmethod
+    def _private_write(path: Path, data: bytes) -> None:
+        if path.is_symlink() or path.parent.is_symlink():
+            raise ValueError(f"Refusing to write through a symbolic link: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if path.name == "nethernet-client.env":
+            os.chmod(path.parent, 0o700)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        tmp = Path(tmp_name)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, path)
+            os.chmod(path, 0o600)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
+    def _file_snapshot(path: Path) -> tuple[bool, bytes, int]:
+        if path.is_symlink():
+            raise ValueError(f"Refusing to replace a symbolic-link configuration file: {path}")
+        if not path.exists():
+            return False, b"", 0o600
+        if not path.is_file():
+            raise ValueError(f"Configuration path is not a regular file: {path}")
+        return True, path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+
+    @classmethod
+    def _restore_file_snapshot(cls, path: Path, snapshot: tuple[bool, bytes, int]) -> None:
+        existed, content, mode = snapshot
+        if existed:
+            cls._private_write(path, content)
+            os.chmod(path, mode)
+        else:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _override_path(self) -> Path:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME", "").strip()
+        if xdg_config and Path(xdg_config).expanduser().is_absolute():
+            config_home = Path(xdg_config).expanduser()
+        else:
+            config_home = HOME / ".config"
+        return config_home / "systemd/user/bedrocknode-tunnel.service.d/90-bds-omni-manager.conf"
+
+    def _service_binary(self, exec_start: str) -> str:
+        binary = self._extract_exec_path(exec_start) or shutil.which("nethernet-client")
+        if not binary:
+            raise ValueError("nethernet-client was not found. Install the BedrockNodeTunnel client before configuring its arguments.")
+        path = Path(binary)
+        if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+            raise ValueError("The nethernet-client executable path is unavailable or not executable.")
+        return str(path)
+
+    @staticmethod
+    def _systemd_word(value: str) -> str:
+        # All flag values are validated to contain no whitespace or quoting
+        # syntax. Escape '%' because systemd expands specifiers in ExecStart.
+        if any(ch.isspace() or ord(ch) < 32 for ch in value):
+            raise ValueError("A client parameter contains whitespace or control characters.")
+        return value.replace("%", "%%")
+
+    def _override_text(self, binary: str, args: dict[str, Any], token_configured: bool) -> str:
+        path_word = '"' + binary.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"' if any(ch.isspace() for ch in binary) else binary.replace("%", "%%")
+        argv = [
+            path_word,
+            "-web=" + self._systemd_word(args["web"]),
+            "-control=" + self._systemd_word(args["control"]),
+            "-local-http=" + self._systemd_word(args["local_http"]),
+            "-local-udp-ip=" + self._systemd_word(args["local_udp_ip"]),
+            "-local-udp-port=" + str(args["local_udp_port"]),
+        ]
+        if token_configured:
+            argv.append("-token=${" + self.TOKEN_ENV_NAME + "}")
+        lines = [
+            "# Managed by BDS Omni Manager. Do not edit this drop-in manually.",
+            "[Service]",
+            f"EnvironmentFile=-{self.TOKEN_ENV_SPEC}",
+            "ExecStart=",
+            "ExecStart=" + " ".join(argv),
+            "",
+        ]
+        return "\n".join(lines)
+
+    def _daemon_reload(self) -> None:
+        code, stdout, stderr = self._run(["systemctl", "--user", "daemon-reload"], timeout=10)
+        if code != 0:
+            raise ValueError((stderr or stdout).strip() or "systemctl --user daemon-reload failed.")
+
+    def set_client_settings(self, data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise ValueError("Nethernet client parameters must be an object.")
+        props, error = self._unit_properties()
+        if error:
+            raise ValueError(error)
+        if props.get("LoadState") != "loaded":
+            raise ValueError(f"The {self.UNIT} user service is not installed. Install the official BedrockNodeTunnel Arch package first.")
+        external = self._other_clients(props.get("MainPID", "0"))
+        if external:
+            pids = ", ".join(str(item["pid"]) for item in external)
+            raise ValueError(f"A foreground nethernet-client process is running outside {self.UNIT} (PID {pids}). Stop it before applying service parameters.")
+        args = self.validate_client_args(data)
+        token = data.get("token")
+        clear_token = data.get("clear_token", False)
+        if not isinstance(clear_token, bool):
+            raise ValueError("Clear custom token must be true or false.")
+        if token is not None and not isinstance(token, str):
+            raise ValueError("Custom token must be text.")
+        token = token.strip() if isinstance(token, str) else ""
+        if token and (len(token) > 4096 or not re.fullmatch(r"[A-Za-z0-9._~+/=-]+", token)):
+            raise ValueError("Custom token must be 1–4096 characters using letters, numbers, dot, underscore, tilde, plus, slash, equals or hyphen.")
+        if token and clear_token:
+            raise ValueError("Enter a new custom token or clear the saved token, not both.")
+
+        binary = self._service_binary(props.get("ExecStart", ""))
+        override_path = self._override_path()
+        token_path = TUNNEL_CLIENT_ENV_FILE
+        override_snapshot = self._file_snapshot(override_path)
+        token_snapshot = self._file_snapshot(token_path)
+        config_before = self.manager.config.get("nethernet_client_args")
+        had_config = "nethernet_client_args" in self.manager.config
+        was_active = props.get("ActiveState") == "active"
+        try:
+            if token:
+                self._private_write(token_path, f'{self.TOKEN_ENV_NAME}="{token}"\n'.encode("ascii"))
+            elif clear_token:
+                try:
+                    token_path.unlink()
+                except FileNotFoundError:
+                    pass
+            elif not token_snapshot[0]:
+                # Migrate a legacy -token argument from the vendor unit into a
+                # private EnvironmentFile before replacing its ExecStart.
+                legacy_token = self._extract_flag(props.get("ExecStart", ""), "token", "")
+                if legacy_token:
+                    if len(legacy_token) > 4096 or not re.fullmatch(r"[A-Za-z0-9._~+/=-]+", legacy_token):
+                        raise ValueError("The existing unit contains a custom token that cannot be safely migrated. Keep the current service arguments or remove that token through the upstream client first.")
+                    self._private_write(token_path, f'{self.TOKEN_ENV_NAME}="{legacy_token}"\n'.encode("ascii"))
+            self.manager.config["nethernet_client_args"] = args
+            self.manager._persist_config()
+            token_configured = token_path.is_file() and not token_path.is_symlink() and token_path.stat().st_size > 0
+            self._private_write(override_path, self._override_text(binary, args, token_configured).encode("utf-8"))
+            self._daemon_reload()
+            if was_active:
+                code, stdout, stderr = self._run(["systemctl", "--user", "restart", self.UNIT], timeout=20)
+                if code != 0:
+                    raise ValueError((stderr or stdout).strip() or "Tunnel service restart failed after applying the parameters.")
+            self.manager._append_log("[manager] Applied nethernet-client parameters through a user-level systemd drop-in; the upstream vendor unit was left untouched.")
+            return {"ok": True, "message": "Nethernet client parameters saved. The active tunnel was restarted with the new arguments." if was_active else "Nethernet client parameters saved for the next tunnel start.", "client_args": args, "token_configured": token_configured}
+        except Exception as exc:
+            # Restore every file/config value we touched, then ask systemd to
+            # reload the previous unit definition. Never log or return tokens.
+            try:
+                self._restore_file_snapshot(override_path, override_snapshot)
+                self._restore_file_snapshot(token_path, token_snapshot)
+                if had_config:
+                    self.manager.config["nethernet_client_args"] = config_before
+                else:
+                    self.manager.config.pop("nethernet_client_args", None)
+                self.manager._persist_config()
+                self._daemon_reload()
+                if was_active:
+                    self._run(["systemctl", "--user", "restart", self.UNIT], timeout=20)
+            except Exception as rollback_error:
+                self.manager._append_log(f"[manager] WARNING: tunnel parameter rollback needs attention: {rollback_error}")
+            raise ValueError(f"Could not apply nethernet-client parameters: {exc}") from exc
+
+    def reset_token(self) -> dict[str, Any]:
+        props, systemd_error = self._unit_properties()
+        if systemd_error:
+            raise ValueError(systemd_error)
+        external = self._other_clients(props.get("MainPID", "0"))
+        if external:
+            pids = ", ".join(str(item["pid"]) for item in external)
+            raise ValueError(f"A foreground nethernet-client process is running outside {self.UNIT} (PID {pids}). Stop it before resetting the token.")
+        binary = self._service_binary(props.get("ExecStart", ""))
+        was_active = props.get("LoadState") == "loaded" and props.get("ActiveState") == "active"
+        if was_active:
+            code, stdout, stderr = self._run(["systemctl", "--user", "stop", self.UNIT], timeout=20)
+            if code != 0:
+                raise ValueError((stderr or stdout).strip() or "Could not stop the tunnel before resetting its token.")
+        working_text = props.get("WorkingDirectory", "").strip()
+        working_dir = Path(working_text).expanduser() if working_text and working_text not in {"-", "~"} else HOME
+        if not working_dir.is_dir():
+            working_dir = HOME
+        try:
+            result = subprocess.run(
+                [binary, "-reset-token"], cwd=working_dir, env=self._user_env(),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=15, check=False, close_fds=True,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            if was_active:
+                self._run(["systemctl", "--user", "start", self.UNIT], timeout=20)
+            raise ValueError(f"Could not run nethernet-client -reset-token: {exc}") from exc
+        if result.returncode != 0:
+            if was_active:
+                self._run(["systemctl", "--user", "start", self.UNIT], timeout=20)
+            raise ValueError(f"nethernet-client -reset-token failed with exit code {result.returncode}. Output was suppressed to avoid exposing claim or token details.")
+        post_reset_error: Exception | None = None
+        try:
+            try:
+                TUNNEL_CLIENT_ENV_FILE.unlink()
+            except FileNotFoundError:
+                pass
+            if props.get("LoadState") == "loaded":
+                args = self.client_args(props.get("ExecStart", ""))
+                binary = self._service_binary(props.get("ExecStart", ""))
+                self._private_write(self._override_path(), self._override_text(binary, args, False).encode("utf-8"))
+                self._daemon_reload()
+        except Exception as exc:
+            post_reset_error = exc
+        restart_error = None
+        if was_active:
+            code, stdout, stderr = self._run(["systemctl", "--user", "start", self.UNIT], timeout=20)
+            if code != 0:
+                restart_error = (stderr or stdout).strip() or "systemctl start failed."
+        if post_reset_error:
+            message = f"The client token was reset, but the manager could not finish updating the user service: {post_reset_error}"
+            if restart_error:
+                message += f" The tunnel also could not be restarted: {restart_error}"
+            raise ValueError(message) from post_reset_error
+        if restart_error:
+            raise ValueError("The token was reset, but the tunnel could not be restarted: " + restart_error)
+        self.manager._append_log("[manager] Requested nethernet-client -reset-token; token contents and claim output were not logged.")
+        return {"ok": True, "message": "Saved tunnel token reset. The client will request a new browser claim the next time it starts."}
+
+    @staticmethod
     def _extract_flag(exec_start: str, name: str, default: str) -> str:
-        # systemctl show renders ExecStart as a structured property. Only read
-        # the three harmless networking flags; never expose arbitrary arguments
-        # (especially a possible -token value) to the UI or logs.
+        # systemctl show renders ExecStart as a structured property. Read only
+        # documented client flags. Callers must never return -token to the UI.
         pattern = rf"(?:^|[\s;=])-{re.escape(name)}(?:=|\s+)(?:\"([^\"]*)\"|'([^']*)'|([^;\s}}]+))"
         match = re.search(pattern, exec_start)
         if not match:
@@ -4567,15 +4911,10 @@ class NethernetTunnelManager:
         loaded = props.get("LoadState") == "loaded"
         active = active_state == "active"
         external_clients = self._other_clients(props.get("MainPID", "0"))
-        tcp_target = self._extract_flag("" if not exec_start else exec_start, "local-http", "127.0.0.1:19132")
-        udp_ip = self._extract_flag(exec_start, "local-udp-ip", "Auto-detected")
-        udp_port_text = self._extract_flag(exec_start, "local-udp-port", "47334")
-        try:
-            udp_port = int(udp_port_text)
-            if not 1 <= udp_port <= 65535:
-                udp_port = 47334
-        except ValueError:
-            udp_port = 47334
+        client_args = self.client_args(exec_start)
+        tcp_target = client_args["local_http"]
+        udp_ip = client_args["local_udp_ip"] or "Auto-detected"
+        udp_port = client_args["local_udp_port"]
 
         properties = self.manager._read_props()
         transport = properties.get("transport", "").strip().lower()
@@ -4607,6 +4946,15 @@ class NethernetTunnelManager:
                 token_candidates.append(fallback_token)
         token_configured = False
         token_permissions_ok: bool | None = None
+        custom_env = TUNNEL_CLIENT_ENV_FILE
+        if custom_env.is_file() and not custom_env.is_symlink():
+            try:
+                token_configured = custom_env.stat().st_size > 0
+                token_permissions_ok = (stat.S_IMODE(custom_env.stat().st_mode) & 0o077) == 0
+            except OSError:
+                token_configured = False
+        if not token_configured and self._extract_flag(exec_start, "token", ""):
+            token_configured = True
         for token_path in token_candidates:
             try:
                 token_stat = token_path.stat()
@@ -4734,6 +5082,7 @@ class NethernetTunnelManager:
             "last_event": last_event,
             "recent_logs_available": bool(logs),
             "target": {"tcp": tcp_target, "udp_ip": udp_ip, "udp_port": udp_port, "tcp_reachable": target_reachable},
+            "client_args": client_args,
             "bds": {
                 "transport": transport or "Not set",
                 "server_ip": properties.get("server-ip", ""),
@@ -5089,6 +5438,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = MANAGER.save_properties(imported)
             elif path == "/api/tunnel/action": result = TUNNEL_MANAGER.action(str(data.get("action", "")))
             elif path == "/api/tunnel/settings": result = MANAGER.set_tunnel_settings(data)
+            elif path == "/api/tunnel/client-settings": result = TUNNEL_MANAGER.set_client_settings(data)
+            elif path == "/api/tunnel/token/reset": result = TUNNEL_MANAGER.reset_token()
             elif path == "/api/schedules": result = MANAGER.upsert_scheduled_job(data.get("job", {}))
             elif path == "/api/schedules/delete": result = MANAGER.delete_scheduled_job(str(data.get("id", "")))
             elif path == "/api/command": result = MANAGER.command(str(data.get("command", "")))
@@ -5138,33 +5489,58 @@ def main() -> None:
     print(f"Local UI: {url}")
     print(f"BDS folder: {MANAGER.root}")
     print("Only listens on 127.0.0.1. Keep this process running while managing BDS.")
-    print("Press Ctrl+C to stop the manager and gracefully stop its managed BDS process.\n")
+    print("Press Ctrl+C to create a verified world backup, then gracefully stop its managed BDS process.\n")
     try:
         import webbrowser
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     except Exception:
         pass
+    interrupted = False
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
-        print("\nManager shutting down. Stopping its managed BDS process cleanly…")
+        interrupted = True
+        print("\nCtrl+C received. Preparing the final world backup before shutdown…")
     finally:
-        # Stop schedulers and wait for any in-flight live backup to release save hold
-        # before stopping the BDS process.
-        MANAGER.shutdown()
+        # Quiesce scheduled/automatic backups first. The final snapshot is taken
+        # while our managed BDS process is still alive, using save hold/query.
+        try:
+            MANAGER.shutdown()
+        except Exception as exc:
+            print(f"WARNING: background shutdown reported an issue: {exc}", file=sys.stderr)
+            MANAGER._append_log(f"[manager] Background shutdown warning: {exc}")
+        if interrupted:
+            try:
+                result = MANAGER.backup("world")
+                if not result.get("ok"):
+                    raise ValueError(result.get("message") or "Backup operation did not report success.")
+                backup_name = result.get("backup", {}).get("name", "(backup created)")
+                print(f"Final world backup created and CRC-verified: {backup_name}")
+            except Exception as exc:
+                # Never copy a live world unsafely or leave the manager hanging.
+                # The error is explicit; managed BDS is still stopped cleanly below.
+                print(f"WARNING: final world backup failed; continuing shutdown: {exc}", file=sys.stderr)
+                try:
+                    MANAGER._append_log(f"[manager] Final Ctrl+C world backup failed: {exc}")
+                except Exception:
+                    pass
         try:
             managed_running = bool(MANAGER.proc and MANAGER.proc.poll() is None)
             if MANAGER.tunnel_stop_with_bds and managed_running:
                 try:
                     TUNNEL_MANAGER.action("stop")
-                except ValueError as exc:
+                except Exception as exc:
                     MANAGER._append_log(f"[manager] Tunnel shutdown warning: {exc}")
             if managed_running:
                 MANAGER.stop()
                 print("Managed BDS server stopped.")
         except Exception as exc:
             print(f"Warning: could not stop managed BDS cleanly: {exc}", file=sys.stderr)
-        httpd.server_close()
+        finally:
+            try:
+                httpd.server_close()
+            except Exception as exc:
+                print(f"Warning: could not close the local HTTP listener cleanly: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
