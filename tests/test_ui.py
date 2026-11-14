@@ -127,7 +127,7 @@ class UiRegressionTests(unittest.TestCase):
 
     def test_application_version_is_updated(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn('APP_VERSION = "2.0.3"', main_source)
+        self.assertIn('APP_VERSION = "2.0.4"', main_source)
 
     def test_nethernet_client_parameter_form_has_explicit_controls_and_oled_styles(self):
         for element_id in (
@@ -355,6 +355,43 @@ class UiRegressionTests(unittest.TestCase):
         self.assertIn('href="https://github.com/NotAlive24/BedrockNodeTunnel"', HTML)
         self.assertIn('href="https://bedrocknode.net/"', HTML)
         self.assertIn("The manager never downloads or replaces the tunnel binary", HTML)
+
+
+    def test_server_update_page_has_protected_data_explanation_and_preflight(self):
+        html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="page-serverupdate"', html)
+        self.assertIn('id="serverUpdateFile" type="file" accept=".zip,application/zip"', html)
+        self.assertIn('id="serverUpdateInspectBtn"', html)
+        self.assertIn('id="serverUpdateApplyBtn"', html)
+        self.assertIn("server.properties", html)
+        self.assertIn("world pack references", html)
+        self.assertIn("Create backup &amp; install update", html)
+        self.assertIn("/api/server-update/preview", html)
+        self.assertIn("/api/server-update/apply", html)
+        self.assertIn("/api/server-update/discard", html)
+
+    def test_server_update_controls_have_explicit_oled_styles(self):
+        html = (Path(__file__).resolve().parents[1] / "static" / "index.html").read_text(encoding="utf-8")
+        for selector in (
+            "#page-serverupdate .server-update-layout",
+            "#page-serverupdate .server-update-drop",
+            "#page-serverupdate .server-update-current",
+            "#page-serverupdate .server-update-package",
+            "#page-serverupdate .server-update-preserve-item",
+            "#page-serverupdate .server-update-actions",
+            "#page-serverupdate .server-update-protected-list",
+            "#page-serverupdate .server-update-protected-list>div",
+            "#page-serverupdate .server-update-protected-list code",
+        ):
+            self.assertIn(selector, html)
+        self.assertIn('@media(max-width:560px){#page-serverupdate', html)
+
+
+    def test_server_update_replaces_and_discards_stale_preview_tickets(self):
+        self.assertIn("let serverUpdatePreviewRequest=0", HTML)
+        self.assertIn("api('/api/server-update/discard','POST',{ticket:old.ticket})", HTML)
+        self.assertIn("if(requestId!==serverUpdatePreviewRequest)", HTML)
+        self.assertIn("$('serverUpdateInspectBtn').disabled=false", HTML)
 
 
 if __name__ == "__main__":

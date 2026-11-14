@@ -46,3 +46,13 @@ bash -n install.sh run.sh
 ```
 
 Node.js, when available, is used by a UI regression test to syntax-check the inline JavaScript. It is not required to run the manager.
+
+## Server distribution updates
+
+The Server Update page accepts the official Linux BDS ZIP and uses a short-lived upload ticket. Preview performs archive path/type/size checks, verifies CRCs, identifies the executable and `server.properties`, and rejects unsupported archive shapes before the live server is stopped.
+
+Apply extracts into a temporary sibling directory on the same filesystem as the configured server root. It then creates a full backup; only after the backup succeeds does it stop managed BDS and (when configured) the linked tunnel. Preserved server files and folders are copied into the staged release. Shared behavior/resource packs are merged by pack UUID so user-installed packs remain while release-bundled packs are refreshed from the new distribution. World directories, including world-local pack references and content, are copied as a unit.
+
+The folder swap uses same-filesystem renames: the old complete installation is moved to a sibling rollback directory, then the staged installation is moved into the configured path. Post-swap checks verify the executable, `server.properties`, active world, and `level-name`. On failure the previous folder is restored. The manager retains the two most recent rollback folders. A successful update leaves BDS stopped for the operator to review and start. Manager configuration is stored outside the BDS root and is not modified by this operation.
+
+Uploads and preview tickets are authenticated and localhost-only like the other manager APIs. Tickets expire after 30 minutes, are limited in count, and live under the private manager state directory. Archive extraction rejects path traversal, case-insensitive duplicate paths, symlinks/special files, encryption, unsupported compression, oversized entries, and CRC errors. The uploaded server executable is never run during validation or installation.

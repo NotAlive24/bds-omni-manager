@@ -1,3 +1,14 @@
+## 2.0.4 — Safe BDS Server Updates
+
+- Added a dedicated Server Update page for importing the official Linux BDS ZIP distribution. The preview validates the archive layout, required server files, path safety, entry/expanded-size limits, and every member CRC before the current server is stopped.
+- Added a two-stage update flow: stage and verify the new distribution beside the existing server folder, create a full CRC-verified backup, stop managed BDS (and the linked tunnel when configured), preserve user/server data, then atomically swap the new installation into place. The updated server remains stopped for review.
+- Preserve `server.properties` (including custom options and NetherNet transport settings), `server-icon.png`, `allowlist.json`, `permissions.json`, packet/profanity configuration, all worlds and world-local pack references, user templates, keys, config, and development packs. Preserve custom shared behavior/resource packs while taking the new distribution's files for UUIDs bundled with that release.
+- Retain the previous complete BDS installation as a sibling rollback folder; automatically restore it if the post-swap checks fail. Keep the two newest rollback folders.
+- Reject non-Linux/invalid archives, missing BDS executables or properties, path traversal, duplicate paths, encrypted/special-file entries, symlinked existing data, external BDS processes, changed archives, insufficient staging space, and expired preview tickets before destructive operations.
+- Added a bounded, authenticated raw ZIP upload endpoint; preview tickets are short-lived, private, and discarded when the user selects a different archive.
+- Added regression tests for root/wrapped official ZIP layouts, preserved settings/worlds/add-ons, custom shared pack merge, live backup-before-stop ordering, external process protection, upload handling, symlink rejection, insufficient backup failure, archive corruption, and atomic rollback.
+- Added a responsive AMOLED Server Update page with current-install status, archive inspection, preservation summary, explicit confirmation, and success/failure reporting.
+
 ## 2.0.3 — Nethernet Client Parameters and Safe Ctrl+C Backup
 
 - Added a dedicated Bedrock Node Tunnel parameter editor for every documented persistent `nethernet-client` setting: `-web`, `-control`, `-local-http`, `-local-udp-ip`, `-local-udp-port`, and an optional custom `-token`. The UI uses structured fields rather than a shell command; endpoint, IP, URL, and port values are validated before saving.

@@ -228,6 +228,39 @@ button:focus:not(:focus-visible){outline:none}
 .tunnel-links{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .tunnel-links a{display:inline-flex;align-items:center;min-height:32px;padding:7px 9px;border:1px solid #294333;border-radius:8px;background:#09140d;color:#7be5a9;text-decoration:none;font-size:9px;font-weight:700}
 .tunnel-links a:hover{border-color:#3b8057;background:#0b1b11}
+#page-serverupdate .server-update-layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(290px,.75fr);gap:14px;align-items:start}
+#page-serverupdate .server-update-card{min-width:0;padding:16px}
+#page-serverupdate .server-update-current{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin:0 0 13px}
+#page-serverupdate .server-update-current>div{min-width:0;padding:10px;border:1px solid #1d2b22;border-radius:10px;background:#050806}
+#page-serverupdate .server-update-current span{display:block;color:#75877b;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px}
+#page-serverupdate .server-update-current strong{display:block;color:#d9e7dd;font-size:11px;overflow-wrap:anywhere}
+#page-serverupdate .server-update-drop{min-height:190px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:22px;border:1px dashed #345542;border-radius:13px;background:linear-gradient(145deg,#07110b,#030504);text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+#page-serverupdate .server-update-drop:hover,#page-serverupdate .server-update-drop:focus-within{border-color:#4be49b;background:#07140c}
+#page-serverupdate .server-update-drop-icon{width:40px;height:40px;border:1px solid #285039;border-radius:12px;display:grid;place-items:center;color:#4be49b;font-size:22px;background:#0b1b11}
+#page-serverupdate .server-update-drop strong{color:#e1eee5;font-size:13px}
+#page-serverupdate .server-update-drop>span:not(.server-update-drop-icon){max-width:460px;color:#85968b;font-size:10px;line-height:1.5}
+#page-serverupdate .server-update-file-name{color:#8fe4b4!important;font:10px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+#page-serverupdate .server-update-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:14px}
+#page-serverupdate .server-update-actions .subtle{min-width:0;flex:1 1 180px;color:#85968b;font-size:10px;line-height:1.45}
+#page-serverupdate .server-update-package{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+#page-serverupdate .server-update-package>div{background:#050806;border:1px solid #1b2920;border-radius:9px;padding:10px;min-width:0}
+#page-serverupdate .server-update-package span{display:block;color:#75877b;font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+#page-serverupdate .server-update-package strong{display:block;color:#d9e8de;font-size:11px;overflow-wrap:anywhere}
+#page-serverupdate .server-update-preserve{margin-top:16px}
+#page-serverupdate .server-update-preserve h3{font-size:12px;margin:0}
+#page-serverupdate .server-update-preserve-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+#page-serverupdate .server-update-preserve-item{display:flex;align-items:flex-start;gap:7px;padding:8px;background:#061009;border:1px solid #1a3424;border-radius:8px;color:#c4d9ca;font-size:10px;line-height:1.4;min-width:0}
+#page-serverupdate .server-update-preserve-item:before{content:'✓';color:#4be49b;font-weight:900}
+#page-serverupdate .server-update-explain,#page-serverupdate .server-update-warning{margin-top:13px}
+#page-serverupdate .server-update-protected-list{display:grid;gap:8px;margin-top:12px}
+#page-serverupdate .server-update-protected-list>div{display:grid;gap:4px;min-width:0;padding:10px 11px;border:1px solid #1b2920;border-radius:9px;background:#050806}
+#page-serverupdate .server-update-protected-list strong{color:#d9e8de;font-size:10px;font-weight:750}
+#page-serverupdate .server-update-protected-list span{color:#85968b;font-size:9px;line-height:1.5;overflow-wrap:anywhere}
+#page-serverupdate .server-update-protected-list code{color:#95e0b0;font-size:9px}
+#page-serverupdate .server-update-result{font-size:11px;line-height:1.65;color:#bdcfc2;overflow-wrap:anywhere}
+#page-serverupdate .server-update-result code{color:#93e6b3}
+@media(max-width:920px){#page-serverupdate .server-update-layout{grid-template-columns:1fr}}
+@media(max-width:560px){#page-serverupdate .server-update-current{grid-template-columns:1fr}#page-serverupdate .server-update-package,#page-serverupdate .server-update-preserve-grid{grid-template-columns:1fr}#page-serverupdate .server-update-drop{min-height:165px;padding:17px}#page-serverupdate .server-update-actions{align-items:stretch}#page-serverupdate .server-update-actions .btn{flex:1 1 100%}}
 #page-tunnel .pill.green{border-color:#285c40;background:#0b1b12;color:#72e9a6}
 #page-tunnel button:disabled{opacity:.42;cursor:not-allowed;filter:saturate(.5)}
 .tunnel-import-intro{margin:0 0 12px;font-size:10px}
@@ -613,6 +646,7 @@ button:focus:not(:focus-visible){outline:none}
       <button data-page="mods"><span class="ico">⬡</span>Mods & Add-ons</button>
       <button data-page="contentlab"><span class="ico">✧</span>Content Intelligence</button>
       <button data-page="backups"><span class="ico">⤓</span>Backups & Restore</button>
+      <button data-page="serverupdate"><span class="ico">⇧</span>Server Update</button>
       <button data-page="files"><span class="ico">▤</span>Server Files</button>
     </nav>
   </div>
@@ -1054,6 +1088,74 @@ button:focus:not(:focus-visible){outline:none}
     </div><div class="card"><div class="section-title"><h2>Backup storage</h2><span>Automatic retention</span></div><div class="field"><label for="backupDir">Backup folder</label><div class="path-entry"><input id="backupDir" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" inputmode="url" placeholder="/home/you/BDS-Backups"><div class="path-actions"><button class="btn ghost" type="button" onclick="pickDirectory('backupDir')">Browse…</button><button class="btn ghost" type="button" onclick="resetConfigInput('backupDir')">Reset</button></div></div><div class="field-help">Choose a folder outside the BDS server directory. You can paste a path here too.</div></div><div class="form-grid" style="margin-top:12px"><div class="field"><label>Automatic world backup</label><select id="autoBackupHours"><option value="0">Off</option><option value="1">Every 1 hour</option><option value="3">Every 3 hours</option><option value="6">Every 6 hours</option><option value="12">Every 12 hours</option><option value="24">Every 24 hours</option><option value="48">Every 48 hours</option></select></div><div class="field"><label>Keep latest archives</label><input id="backupKeep" type="number" min="1" max="100" value="10"></div></div><div class="form-actions"><button class="btn primary" onclick="saveBackupSettings()">Save backup settings</button></div><div class="divider"></div><div class="info-row"><span>Backup engine</span><span>Python ZIP64</span></div><div class="info-row"><span>Compression</span><span>Deflate · level 4</span></div><div class="info-row"><span>Default retention</span><span id="retentionInfo">10 archives</span></div></div></div>
   </section>
 
+  <section class="page" id="page-serverupdate">
+    <div class="page-head">
+      <div><div class="eyebrow">Server maintenance</div><h1>Update Bedrock Dedicated Server</h1><p>Import an official Linux BDS ZIP. The manager replaces server runtime files while carrying forward your existing world, settings, access files and installed add-ons.</p></div>
+      <span class="pill" id="serverUpdateStateBadge">Checking installation…</span>
+    </div>
+
+    <div class="server-update-layout">
+      <div class="stack">
+        <div class="card server-update-card">
+          <div class="section-title"><h2>1 · Choose the BDS update ZIP</h2><span>Official Linux distribution</span></div>
+          <div class="server-update-current" id="serverUpdateCurrent">
+            <div><span>Current server version</span><strong id="serverUpdateCurrentVersion">—</strong></div>
+            <div><span>Installation folder</span><strong id="serverUpdateCurrentDir">—</strong></div>
+            <div><span>Server process</span><strong id="serverUpdateCurrentProcess">—</strong></div>
+          </div>
+          <label class="server-update-drop" for="serverUpdateFile" id="serverUpdateDrop">
+            <span class="server-update-drop-icon">⇧</span>
+            <strong>Select a Bedrock Dedicated Server ZIP</strong>
+            <span>Choose the Linux server archive downloaded from the official BDS distribution page.</span>
+            <span class="server-update-file-name" id="serverUpdateFileName">No file selected</span>
+            <input id="serverUpdateFile" type="file" accept=".zip,application/zip" hidden>
+          </label>
+          <div class="server-update-actions">
+            <button class="btn primary" type="button" id="serverUpdateInspectBtn" onclick="previewServerUpdate()">Inspect update ZIP</button>
+            <span class="subtle" id="serverUpdateUploadStatus" aria-live="polite">The ZIP is validated before any server files are changed.</span>
+          </div>
+        </div>
+
+        <div class="card server-update-card" id="serverUpdatePreviewCard" hidden>
+          <div class="section-title"><h2>2 · Review update package</h2><span class="pill green">Archive validated</span></div>
+          <div class="server-update-package" id="serverUpdatePackageDetails"></div>
+          <div class="server-update-preserve">
+            <div class="section-title"><h3>Data that will be preserved</h3><span>Copied from your current installation</span></div>
+            <div id="serverUpdatePreserveList" class="server-update-preserve-grid"></div>
+          </div>
+          <div class="notice info server-update-explain">Before installation, BDS Omni creates and CRC-verifies a full server backup. It then stops the managed server, stages the new distribution beside your existing server folder, copies your saved data into it, and swaps the folders. A complete previous installation is retained for rollback.</div>
+          <div class="notice danger server-update-warning">The server will be stopped during installation. It will remain stopped afterward so you can review the update before starting it. Do not close BDS Omni while the update is applying.</div>
+          <div class="server-update-actions">
+            <button class="btn primary" type="button" id="serverUpdateApplyBtn" onclick="applyServerUpdate()">Create backup &amp; install update</button>
+            <button class="btn ghost" type="button" id="serverUpdateDiscardBtn" onclick="discardServerUpdatePreview()">Discard preview</button>
+            <span class="subtle" id="serverUpdateApplyStatus" aria-live="polite">No server files have been changed yet.</span>
+          </div>
+        </div>
+
+        <div class="card server-update-card" id="serverUpdateResultCard" hidden>
+          <div class="section-title"><h2>Update result</h2><span class="pill green" id="serverUpdateResultBadge">Completed</span></div>
+          <div id="serverUpdateResultText" class="server-update-result"></div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card server-update-card">
+          <div class="section-title"><h2>Protected server data</h2><span>Not replaced by the ZIP</span></div>
+          <div class="server-update-protected-list">
+            <div><strong>Worlds &amp; world pack links</strong><span><code>worlds/</code> including LevelDB data and per-world pack references.</span></div>
+            <div><strong>Server configuration</strong><span><code>server.properties</code>, preserving the current world name, ports, NetherNet transport, gameplay settings and custom values.</span></div>
+            <div><strong>Player access</strong><span><code>allowlist.json</code> and <code>permissions.json</code>.</span></div>
+            <div><strong>Installed add-ons</strong><span>Custom shared behavior/resource packs, plus development pack folders. World-local pack references are retained with each world.</span></div>
+            <div><strong>Server assets &amp; templates</strong><span><code>server-icon.png</code> and user world templates are preserved. New release templates take precedence when names match.</span></div>
+            <div><strong>Manager settings</strong><span>Stored outside the BDS folder; server path, backup path, schedules and NetherNet client settings are not changed.</span></div>
+          </div>
+        </div>
+        <div class="notice info"><strong>Important:</strong> This page accepts the Linux BDS ZIP containing <code>bedrock_server</code> and <code>server.properties</code>. Windows archives and incomplete folders are rejected. The uploaded executable is never run during validation.</div>
+        <div class="notice"><strong>Rollback:</strong> The previous complete server folder is retained next to your BDS folder. The latest two rollback installations are kept. Your separate full backup is stored in the configured BDS backup directory.</div>
+      </div>
+    </div>
+  </section>
+
   <section class="page" id="page-files">
     <div class="page-head"><div><div class="eyebrow">Server directory</div><h1>Server Files</h1><p>Browse the BDS folder in read-only mode. Open folders to inspect worlds, packs, logs, and configuration files.</p></div><button class="btn ghost" onclick="loadBrowse(browsePath)">↻ Refresh</button></div>
     <div class="card"><div class="section-title"><h2>Directory browser</h2><span>Read-only · Symlinks are not followed</span></div><div class="inline-fields" style="margin-bottom:12px"><button class="btn ghost small" onclick="browseUp()">↑ Up one level</button><div class="pill" id="browseCrumb">/</div></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody id="browseRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div><div class="subtle" style="margin-top:10px">File editing is deliberately limited to the structured server properties and access-file panels, to avoid accidental edits to world database files.</div></div>
@@ -1074,6 +1176,7 @@ button:focus:not(:focus-visible){outline:none}
 const TOKEN='__BDS_TOKEN__';
 let appState=null, logCursor=0, accessData={allowlist:[],permissions:[]}, accessTab='allowlist', propertyValues={}, propertyGroups={}, commandData={}, commandForms=[], guidedPreview=null, guidedRequestId=0, guidedValidationPending=false, browsePath='', backupCache=[];
 let worldCache=[], packCache={behavior:[],resource:[]}, selectedWorld='', worldActionMode='', worldActionSource='';
+let serverUpdatePreview=null,serverUpdateState=null,serverUpdateBusy=false;
 let modsCache=[], modsWorlds=[], modsLoadRunning=false;
 let contentLabData=null, contentProfileCache=[], contentLabLoading=false, contentLabWorlds=[], contentLabRequestId=0, contentLabMutationRunning=false, contentLabActionRunning=false;
 let tunnelState=null, tunnelLoadRunning=false, tunnelSettingsDirty=false, tunnelClientSettingsDirty=false;
@@ -1109,7 +1212,7 @@ async function deleteScheduledJob(id){const j=scheduleCache.find(x=>x.id===id);i
 async function api(path,method='GET',body=null){const opts={method,headers:{'X-BDS-Token':TOKEN}};if(body!==null){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body)}const res=await fetch(path,opts);let data;try{data=await res.json()}catch{data={error:await res.text()}}if(!res.ok)throw new Error(data.error||'Request failed');return data}
 function toast(message,error=false){const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=message;$('toastStack').append(el);setTimeout(()=>el.remove(),4500)}
 function ask(title,body,actionLabel='Continue'){return new Promise(resolve=>{$('modalTitle').textContent=title;$('modalBody').textContent=body;$('modalOk').textContent=actionLabel;$('modal').classList.add('open');const done=v=>{$('modal').classList.remove('open');$('modalOk').onclick=null;$('modalCancel').onclick=null;resolve(v)};$('modalOk').onclick=()=>done(true);$('modalCancel').onclick=()=>done(false)})}
-function navigate(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('page-'+page).classList.add('active');document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('crumb').textContent=({dashboard:'Dashboard',console:'Console & Commands',monitor:'Monitoring & Tasks',tunnel:'Bedrock Node Tunnel',players:'Players & Access',world:'World Controls',ticking:'Ticking Areas',properties:'server.properties',worlds:'Worlds & Packs',mods:'Mods & Add-ons',contentlab:'Content Intelligence',backups:'Backups & Restore',files:'Server Files',settings:'Settings'})[page]||page;$('sidebar').classList.remove('open');if(page==='properties')loadProperties();if(page==='players')loadAccess();if(page==='worlds')loadWorldsAndPacks();if(page==='mods')loadMods();if(page==='contentlab')loadContentLab();if(page==='backups')loadBackups();if(page==='files')loadBrowse('');if(page==='console')loadCommands();if(page==='monitor')loadMonitoring();if(page==='tunnel')loadTunnel()}
+function navigate(page){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('page-'+page).classList.add('active');document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x.dataset.page===page));$('crumb').textContent=({dashboard:'Dashboard',console:'Console & Commands',monitor:'Monitoring & Tasks',tunnel:'Bedrock Node Tunnel',players:'Players & Access',world:'World Controls',ticking:'Ticking Areas',properties:'server.properties',worlds:'Worlds & Packs',mods:'Mods & Add-ons',contentlab:'Content Intelligence',backups:'Backups & Restore',serverupdate:'Server Update',files:'Server Files',settings:'Settings'})[page]||page;$('sidebar').classList.remove('open');if(page==='properties')loadProperties();if(page==='players')loadAccess();if(page==='worlds')loadWorldsAndPacks();if(page==='mods')loadMods();if(page==='contentlab')loadContentLab();if(page==='backups')loadBackups();if(page==='serverupdate')loadServerUpdateState();if(page==='files')loadBrowse('');if(page==='console')loadCommands();if(page==='monitor')loadMonitoring();if(page==='tunnel')loadTunnel()}
 document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.page)));$('mobileMenu').addEventListener('click',()=>$('sidebar').classList.toggle('open'));
 function fmtDuration(sec){if(!sec)return '—';let d=Math.floor(sec/86400),h=Math.floor(sec%86400/3600),m=Math.floor(sec%3600/60),s=sec%60;return (d?d+'d ':'')+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')}
 function formatBytes(n){if(!n)return '0 B';let u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toFixed(i?1:0)+' '+u[i]}
@@ -1532,6 +1635,15 @@ $('labWorldSelect').addEventListener('change',async()=>{const world=$('labWorldS
 $('labProfileTarget').addEventListener('change',()=>{$('labProfilePreview').hidden=true});
 
 async function createBackup(mode){const label=mode==='full'?'full BDS server':'active world';if(!await ask('Create '+label+' backup?',mode==='full'?'This can take a while and needs free disk space.':'The manager will snapshot the active world and its shared pack/config files.','Create backup'))return;try{const r=await api('/api/backup','POST',{mode});toast(r.message);loadBackups()}catch(e){toast(e.message,true)}}async function loadBackups(){try{backupCache=await api('/api/backups');$('restoreList').innerHTML=backupCache.map((b,i)=>`<div class="backup-row"><div class="avatar">⤓</div><div class="row-grow"><strong>${esc(b.name)}</strong><small>${b.mode==='world'?'WORLD SNAPSHOT':b.mode==='full'?'FULL SERVER':'UNKNOWN'} · ${formatBytes(b.size)} · ${esc(b.modified)}</small></div><button class="btn ghost small" onclick="verifyBackup('${esc(b.name)}')">Verify</button><button class="btn danger small" onclick="restoreBackup('${esc(b.name)}')">Restore</button></div>`).join('')||'<div class="empty-state">No archives in the configured backup folder.</div>'}catch(e){toast(e.message,true)}}async function verifyBackup(name){try{const r=await api('/api/backup/verify','POST',{name});toast(r.message)}catch(e){toast('Backup verification failed: '+e.message,true)}}async function restoreBackup(name){const item=backupCache.find(b=>b.name===name);const detail=item?.mode==='world'?'The archived world folder will REPLACE the current folder with the same name. Server properties, allowlist, permissions and pack folders in the archive will also be restored.':item?.mode==='full'?'Matching files will be restored as an overlay. Files not present in the archive will remain.':'The server must be stopped. Matching paths may be overwritten.';if(!await ask('Restore this backup?',`${name}\n\nThe server must be stopped. ${detail} Make a current full backup first if you need to preserve the existing server.`, 'Restore backup'))return;try{const r=await api('/api/restore','POST',{name});toast(r.message);await refreshState()}catch(e){toast(e.message,true)}}async function saveBackupSettings(){const requested=val('backupDir').trim();if(!requested)return toast('Choose a backup folder path first.',true);try{const r=await api('/api/config/backups','POST',{backup_dir:requested,auto_backup_hours:Number(val('autoBackupHours')),backup_keep:Number(val('backupKeep'))});CONFIG_INPUT_IDS.filter(id=>id!=='serverDirInput').forEach(id=>markConfigInputClean(id));toast(r.message);await refreshState()}catch(e){toast(e.message,true)}}
+async function loadServerUpdateState(){try{serverUpdateState=await api('/api/server-update/state');$('serverUpdateCurrentVersion').textContent=serverUpdateState.current_version||'Unknown';$('serverUpdateCurrentDir').textContent=serverUpdateState.server_dir||'Not configured';$('serverUpdateCurrentProcess').textContent=serverUpdateState.running?'Running · update will create a live full backup before stopping':'Stopped';$('serverUpdateStateBadge').textContent=serverUpdateState.executable_exists?'BDS installation detected':'BDS installation not found';$('serverUpdateStateBadge').className='pill '+(serverUpdateState.executable_exists?'green':'warning')}catch(e){$('serverUpdateStateBadge').textContent='Unable to inspect server';$('serverUpdateStateBadge').className='pill warning';toast(e.message,true)}}
+let serverUpdatePreviewRequest=0;
+function clearServerUpdatePreview(discardTicket=true){const old=serverUpdatePreview;serverUpdatePreview=null;$('serverUpdatePreviewCard').hidden=true;$('serverUpdateApplyBtn').disabled=true;if(discardTicket&&old?.ticket)api('/api/server-update/discard','POST',{ticket:old.ticket}).catch(()=>{})}
+$('serverUpdateFile').addEventListener('change',()=>{serverUpdatePreviewRequest++;clearServerUpdatePreview();$('serverUpdateInspectBtn').disabled=false;$('serverUpdateInspectBtn').textContent='Inspect update ZIP';const f=$('serverUpdateFile').files?.[0];$('serverUpdateFileName').textContent=f?`${f.name} · ${formatBytes(f.size)}`:'No file selected';$('serverUpdateUploadStatus').textContent=f?'Ready to inspect. No server files have been changed.':'The ZIP is validated before any server files are changed.';$('serverUpdateResultCard').hidden=true});
+async function previewServerUpdate(){const file=$('serverUpdateFile').files?.[0];if(!file)return toast('Choose the official Linux BDS ZIP first.',true);if(!file.name.toLowerCase().endsWith('.zip'))return toast('Choose a .zip server distribution.',true);const limit=serverUpdateState?.upload_limit_bytes||4*1024*1024*1024;if(file.size<=0||file.size>limit)return toast('The ZIP is empty or exceeds the 4 GiB upload limit.',true);const requestId=++serverUpdatePreviewRequest;const button=$('serverUpdateInspectBtn');button.disabled=true;button.textContent='Uploading & validating…';$('serverUpdateUploadStatus').textContent='Uploading the ZIP and checking every archive entry and CRC. The current server is not being changed.';clearServerUpdatePreview();try{const response=await fetch('/api/server-update/preview',{method:'POST',headers:{'X-BDS-Token':TOKEN,'X-Upload-Filename':encodeURIComponent(file.name)},body:file});let result;try{result=await response.json()}catch{result={error:'The server returned an unreadable response.'}}if(!response.ok)throw new Error(result.error||'Could not inspect the BDS ZIP.');if(requestId!==serverUpdatePreviewRequest){if(result.ticket)api('/api/server-update/discard','POST',{ticket:result.ticket}).catch(()=>{});return}serverUpdatePreview=result;renderServerUpdatePreview(result);$('serverUpdateUploadStatus').textContent='ZIP validated. Review the preserved data and apply when ready.';$('serverUpdateResultCard').hidden=true}catch(e){if(requestId===serverUpdatePreviewRequest){$('serverUpdateUploadStatus').textContent='Inspection failed: '+e.message;toast(e.message,true)}}finally{if(requestId===serverUpdatePreviewRequest){button.disabled=false;button.textContent='Inspect update ZIP'}}}
+function renderServerUpdatePreview(data){$('serverUpdatePreviewCard').hidden=false;$('serverUpdatePackageDetails').innerHTML=[['Archive',data.filename],['Archive layout',data.archive_root==='.'?'Files at ZIP root':'Single enclosing folder: '+data.archive_root],['Compressed size',formatBytes(data.size_bytes)],['Files to install',Number(data.file_count||0).toLocaleString()],['Expanded size',formatBytes(data.expanded_bytes)],['Target folder',data.target_dir],['Current BDS version',data.current_version||'Unknown'],['Preview expires',data.ticket_expires_at||'In 30 minutes']].map(([label,value])=>`<div><span>${esc(label)}</span><strong>${esc(String(value))}</strong></div>`).join('');const items=Array.isArray(data.preserved)?data.preserved:[];$('serverUpdatePreserveList').innerHTML=items.map(item=>`<div class="server-update-preserve-item">${esc(item)}</div>`).join('');$('serverUpdateApplyBtn').disabled=false;$('serverUpdateApplyStatus').textContent='Preflight passed. Applying creates a new full backup before stopping BDS.'}
+async function discardServerUpdatePreview(){if(!serverUpdatePreview)return;serverUpdatePreviewRequest++;clearServerUpdatePreview();$('serverUpdateUploadStatus').textContent='Preview discarded. Upload a ZIP to inspect another build.'}
+async function applyServerUpdate(){if(!serverUpdatePreview?.ticket||serverUpdateBusy)return;const running=serverUpdateState?.running;const message=(running?'BDS is currently running. The manager will create and verify a full live backup, stop the server, install the update, and leave it stopped.':'The manager will create and verify a full backup, install the update, and leave BDS stopped.')+'\n\nThe current server.properties, allowlist, permissions, worlds, world-specific pack links, custom shared add-ons, and manager settings are preserved. A previous complete server folder is retained for rollback. Continue?';if(!await ask('Install BDS update?',message,'Back up & update'))return;serverUpdateBusy=true;const button=$('serverUpdateApplyBtn');button.disabled=true;button.textContent='Backing up & installing…';$('serverUpdateApplyStatus').textContent='Creating a full backup. Do not close BDS Omni Manager.';try{const result=await api('/api/server-update/apply','POST',{ticket:serverUpdatePreview.ticket});serverUpdatePreview=null;$('serverUpdatePreviewCard').hidden=true;$('serverUpdateResultCard').hidden=false;$('serverUpdateResultBadge').textContent='Completed';$('serverUpdateResultBadge').className='pill green';$('serverUpdateResultText').innerHTML=`<p>${esc(result.message||'BDS update completed.')}</p><p><strong>Full backup:</strong> <code>${esc(result.backup?.name||'Created; see Backups & Restore')}</code></p><p><strong>Previous installation:</strong> <code>${esc(result.rollback_folder||'Retained beside the server folder')}</code></p><p><strong>Preserved entries:</strong> ${Number(result.preserved?.length||0)}. The new server is stopped; review the installation and start it when ready.</p>`;$('serverUpdateUploadStatus').textContent='Update complete. The server remains stopped.';$('serverUpdateApplyStatus').textContent='Update completed successfully.';toast('BDS server files updated. World and configuration data were preserved.');$('serverUpdateFile').value='';$('serverUpdateFileName').textContent='No file selected';await Promise.all([loadServerUpdateState(),refreshState(),loadBackups()])}catch(e){$('serverUpdateApplyStatus').textContent='Update failed: '+e.message;$('serverUpdateResultCard').hidden=false;$('serverUpdateResultBadge').textContent='Failed';$('serverUpdateResultBadge').className='pill red';$('serverUpdateResultText').textContent=e.message;toast(e.message,true)}finally{serverUpdateBusy=false;button.disabled=!serverUpdatePreview?.ticket;button.textContent='Create backup & install update'}}
+
 async function loadBrowse(path){browsePath=path;try{const d=await api('/api/browse?path='+encodeURIComponent(path));browsePath=d.path==='.'?'':d.path;$('browseCrumb').textContent='/'+browsePath;$('browseRows').innerHTML=d.entries.map(x=>`<tr><td>${x.type==='folder'?'📁':'📄'} ${esc(x.name)}</td><td>${esc(x.type)}</td><td>${x.type==='file'?formatBytes(x.size):'—'}</td><td>${esc(x.modified)}</td><td>${x.type==='folder'?`<button class="btn small" onclick="loadBrowse('${esc((browsePath?browsePath+'/':'')+x.name)}')">Open</button>`:''}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">This folder is empty.</td></tr>'}catch(e){$('browseRows').innerHTML=`<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`}}function browseUp(){const a=browsePath.split('/').filter(Boolean);a.pop();loadBrowse(a.join('/'))}
 async function pickDirectory(inputId){const kind=inputId==='serverDirInput'?'server':inputId==='backupDir'?'backup':null;if(!kind)return;try{const result=await api('/api/dialog/choose-directory','POST',{kind});if(result.cancelled)return;const el=$(inputId);el.value=result.path;setConfigDraft(inputId,result.path);toast('Folder selected. Save to apply the new path.')}catch(e){toast(e.message,true)}}
 async function saveServerDir(){const requested=val('serverDirInput').trim();if(!requested)return toast('Choose a server folder path first.',true);try{const r=await api('/api/config/server-dir','POST',{server_dir:requested});markConfigInputClean('serverDirInput');toast(r.message);await refreshState()}catch(e){toast(e.message,true)}}

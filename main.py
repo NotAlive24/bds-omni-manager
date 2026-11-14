@@ -30,7 +30,7 @@ from typing import Any
 from urllib.parse import urlparse, parse_qs, unquote, quote
 
 APP_NAME = "BDS Omni Manager"
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 HOME = Path.home()
 CONFIG_DIR = HOME / ".config" / "bds-omni-manager"
 STATE_DIR = HOME / ".local" / "state" / "bds-omni-manager"
@@ -43,6 +43,17 @@ DEFAULT_BACKUPS = HOME / "BDS-Backups"
 MAX_CONTENT_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024
 MAX_CONTENT_EXTRACTED_BYTES = 32 * 1024 * 1024 * 1024
 MAX_CONTENT_ARCHIVE_ENTRIES = 150_000
+MAX_SERVER_UPDATE_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
+SERVER_UPDATE_TICKET_TTL = 30 * 60
+SERVER_UPDATE_PRESERVE_FILES = (
+    "server.properties", "allowlist.json", "permissions.json", "server-icon.png",
+    "packetlimitconfig.json", "profanity_filter.wlist",
+)
+SERVER_UPDATE_PRESERVE_DIRS = (
+    "worlds", "world_templates", "keys", "config",
+    "development_behavior_packs", "development_resource_packs",
+    "development_skin_packs",
+)
 
 # Command names and descriptions follow the official Bedrock command index.
 COMMANDS: dict[str, dict[str, str]] = {
@@ -911,6 +922,8 @@ class Manager:
         self.backup_meta_lock = threading.Lock()
         self.download_lock = threading.Lock()
         self.download_tickets: dict[str, tuple[Path, str, str, float]] = {}
+        self._server_update_lock = threading.RLock()
+        self.server_update_tickets: dict[str, dict[str, Any]] = {}
         self._backup_meta_cache: dict[str, tuple[int, int, dict[str, Any]]] = {}
         self.log_lock = threading.Lock()
         self.log_id = 0
@@ -1690,6 +1703,494 @@ class Manager:
         self._restore_cached_server_version()
         self._persist_config()
         return {"ok": True, "message": f"Server folder set to {path}"}
+
+    def _server_update_store(self) -> tuple[threading.RLock, dict[str, dict[str, Any]]]:
+        lock = getattr(self, "_server_update_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._server_update_lock = lock
+        tickets = getattr(self, "server_update_tickets", None)
+        if not isinstance(tickets, dict):
+            tickets = {}
+            self.server_update_tickets = tickets
+        return lock, tickets
+
+    @staticmethod
+    def _server_update_public(ticket: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "filename": ticket["filename"],
+            "size_bytes": ticket["size_bytes"],
+            "file_count": ticket["file_count"],
+            "expanded_bytes": ticket["expanded_bytes"],
+            "archive_root": ticket["archive_root"] or ".",
+            "target_dir": ticket["target_root"],
+            "current_version": ticket["current_version"],
+            "preserved": list(ticket["preserved"]),
+            "ticket_expires_at": ticket["expires_at"],
+        }
+
+    def _cleanup_server_update_tickets(self, tickets: dict[str, dict[str, Any]], now: float | None = None) -> None:
+        current = time.time() if now is None else now
+        for token, item in list(tickets.items()):
+            if current >= float(item.get("expires_epoch", 0)):
+                path = item.get("path")
+                if isinstance(path, Path):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                tickets.pop(token, None)
+
+    def server_update_state(self) -> dict[str, Any]:
+        with self.process_lock:
+            running = bool(self.proc and self.proc.poll() is None)
+        return {
+            "server_dir": str(self.root),
+            "current_version": self.server_version,
+            "running": running,
+            "executable_exists": self.bds_executable().is_file() and not self.bds_executable().is_symlink(),
+            "upload_limit_bytes": MAX_SERVER_UPDATE_UPLOAD_BYTES,
+            "preserved_files": list(SERVER_UPDATE_PRESERVE_FILES),
+            "preserved_directories": list(SERVER_UPDATE_PRESERVE_DIRS) + ["behavior_packs (custom packs)", "resource_packs (custom packs)"],
+            "requires_full_backup": True,
+            "requires_restart": True,
+        }
+
+    def prepare_server_update_archive(self, archive_path: Path, filename: str) -> dict[str, Any]:
+        """Validate a Linux BDS ZIP and retain it as a short-lived apply ticket."""
+        if Path(filename).suffix.lower() != ".zip":
+            raise ValueError("Server updates require the official Linux Bedrock Dedicated Server .zip archive.")
+        if archive_path.is_symlink() or not archive_path.is_file():
+            raise ValueError("Uploaded server archive is missing or unsafe.")
+        archive_size = archive_path.stat().st_size
+        if archive_size <= 0 or archive_size > MAX_SERVER_UPDATE_UPLOAD_BYTES:
+            raise ValueError("Server ZIP must be between 1 byte and 4 GiB.")
+        raw_target_root = self.root.expanduser()
+        if raw_target_root.is_symlink():
+            raise ValueError("The configured BDS folder is a symbolic link. Choose its real directory in Manager Settings first.")
+        target_root = raw_target_root.resolve()
+        if not target_root.is_dir():
+            raise ValueError("The configured BDS folder is not a normal directory. Check Manager Settings first.")
+        if not (target_root / "bedrock_server").is_file() or (target_root / "bedrock_server").is_symlink():
+            raise ValueError("The configured folder does not contain a Linux bedrock_server executable.")
+        if not (target_root / "server.properties").is_file() or (target_root / "server.properties").is_symlink():
+            raise ValueError("The configured folder does not contain server.properties.")
+
+        try:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                entries = self._archive_entries(
+                    zf,
+                    max_entries=MAX_CONTENT_ARCHIVE_ENTRIES,
+                    max_bytes=MAX_CONTENT_EXTRACTED_BYTES,
+                )
+                prefix = self._root_prefix(entries, "bedrock_server")
+                names = {str(path) for info, path in entries if not info.is_dir()}
+                if f"{prefix}server.properties" not in names:
+                    raise ValueError("This ZIP does not look like a complete Linux BDS distribution: server.properties is missing.")
+                executable_info = next(info for info, path in entries if not info.is_dir() and str(path) == f"{prefix}bedrock_server")
+                if executable_info.file_size < 1024:
+                    raise ValueError("The ZIP's bedrock_server executable is unexpectedly small.")
+                bad_member = zf.testzip()
+                if bad_member:
+                    raise ValueError(f"Server ZIP CRC verification failed at {bad_member}.")
+                expanded_bytes = sum(info.file_size for info, _ in entries)
+                file_count = sum(1 for info, _ in entries if not info.is_dir())
+        except (zipfile.BadZipFile, OSError, RuntimeError, StopIteration) as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError(f"Could not inspect the BDS ZIP: {exc}") from exc
+
+        lock, tickets = self._server_update_store()
+        with lock:
+            self._cleanup_server_update_tickets(tickets)
+            if len(tickets) >= 3:
+                raise ValueError("There are already three pending server update previews. Apply or discard one before uploading another.")
+            token = secrets.token_urlsafe(24)
+            state_dir = STATE_DIR
+            if state_dir.is_symlink():
+                raise ValueError("The manager state directory is a symbolic link; refusing to store an update archive there.")
+            state_dir.mkdir(parents=True, exist_ok=True)
+            saved_archive = state_dir / f"server-update-{token}.zip"
+            os.replace(archive_path, saved_archive)
+            try:
+                saved_archive.chmod(0o600)
+            except OSError:
+                saved_archive.unlink(missing_ok=True)
+                raise
+            expires_epoch = time.time() + SERVER_UPDATE_TICKET_TTL
+            ticket = {
+                "path": saved_archive,
+                "filename": Path(filename).name,
+                "size_bytes": archive_size,
+                "file_count": file_count,
+                "expanded_bytes": expanded_bytes,
+                "archive_root": prefix.rstrip("/"),
+                "target_root": str(target_root),
+                "current_version": self.server_version,
+                "created_epoch": time.time(),
+                "expires_epoch": expires_epoch,
+                "expires_at": datetime.fromtimestamp(expires_epoch).astimezone().isoformat(timespec="minutes"),
+                "preserved": list(SERVER_UPDATE_PRESERVE_FILES)
+                    + list(SERVER_UPDATE_PRESERVE_DIRS)
+                    + ["shared behavior_packs/resource_packs: custom packs are merged; matching bundled UUIDs use the new BDS files"],
+            }
+            tickets[token] = ticket
+            self._append_log(f"[manager] Validated BDS update archive {Path(filename).name} ({file_count} files; {expanded_bytes} expanded bytes).")
+            result = self._server_update_public(ticket)
+            result.update({"ok": True, "ticket": token, "message": "BDS ZIP validated. Review the preservation list, then apply the update."})
+            return result
+
+    @staticmethod
+    def _remove_update_stage_path(path: Path) -> None:
+        if path.is_symlink():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+    @classmethod
+    def _copy_update_tree_safely(cls, source: Path, destination: Path) -> None:
+        """Copy regular files/directories only; never follow symlinks or special files."""
+        try:
+            mode = source.lstat().st_mode
+        except OSError as exc:
+            raise ValueError(f"Could not inspect preserved server data {source}: {exc}") from exc
+        if stat.S_ISLNK(mode):
+            raise ValueError(f"A preserved server-data path is a symbolic link: {source}. Remove or replace it before updating.")
+        if stat.S_ISREG(mode):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.is_symlink():
+                raise ValueError(f"Staged update path is unsafe: {destination}")
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            elif destination.exists():
+                destination.unlink()
+            shutil.copy2(source, destination, follow_symlinks=False)
+            return
+        if not stat.S_ISDIR(mode):
+            raise ValueError(f"A preserved server-data path is not a regular file or directory: {source}")
+        destination.mkdir(parents=True, exist_ok=True)
+        for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
+            target = destination / child.name
+            cls._copy_update_tree_safely(child, target)
+        try:
+            shutil.copystat(source, destination, follow_symlinks=False)
+        except OSError:
+            pass
+
+    def _pack_uuid_in_directory(self, folder: Path) -> str:
+        manifest_path = folder / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return ""
+        try:
+            if manifest_path.stat().st_size > 2_000_000:
+                return ""
+            manifest, _ = self._parse_pack_manifest_text(manifest_path.read_text(encoding="utf-8"))
+            header = manifest.get("header") if isinstance(manifest, dict) else None
+            value = header.get("uuid", "") if isinstance(header, dict) else ""
+            return str(uuidlib.UUID(str(value)))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            return ""
+
+    def _merge_updated_shared_packs(self, old_root: Path, staged_root: Path, folder_name: str) -> list[str]:
+        """Keep user-installed shared packs while taking bundled packs from the new BDS ZIP."""
+        old_dir = old_root / folder_name
+        if old_dir.is_symlink():
+            raise ValueError(f"The existing {folder_name} directory is a symbolic link; refusing to update without risking pack data.")
+        if not old_dir.is_dir():
+            return []
+        new_dir = staged_root / folder_name
+        if new_dir.is_symlink():
+            raise ValueError(f"The uploaded archive contains an unsafe {folder_name} directory.")
+        new_dir.mkdir(parents=True, exist_ok=True)
+        new_uuids = {
+            self._pack_uuid_in_directory(child)
+            for child in new_dir.iterdir()
+            if child.is_dir() and not child.is_symlink()
+        }
+        new_uuids.discard("")
+        preserved: list[str] = []
+        for child in sorted(old_dir.iterdir(), key=lambda item: item.name.casefold()):
+            if child.is_symlink():
+                raise ValueError(f"Existing shared pack contains a symbolic link: {child}. Remove or replace it before updating.")
+            if child.name.startswith(".bds-omni-"):
+                continue
+            child_mode = child.lstat().st_mode
+            if not (stat.S_ISDIR(child_mode) or stat.S_ISREG(child_mode)):
+                raise ValueError(f"Existing shared pack entry is not a regular file or directory: {child}")
+            pack_uuid = self._pack_uuid_in_directory(child) if stat.S_ISDIR(child_mode) else ""
+            # The current BDS distribution owns any matching bundled UUID.
+            # Keep the new version rather than carrying an obsolete built-in pack forward.
+            if pack_uuid and pack_uuid in new_uuids:
+                continue
+            target = new_dir / child.name
+            if target.exists() or target.is_symlink():
+                suffix = (pack_uuid.replace("-", "")[:8] if pack_uuid else hashlib.sha256(child.name.encode("utf-8")).hexdigest()[:8])
+                target = new_dir / f"{child.name[:72]}__preserved_{suffix}"
+                counter = 2
+                while target.exists() or target.is_symlink():
+                    target = new_dir / f"{child.name[:64]}__preserved_{suffix}_{counter}"
+                    counter += 1
+            self._copy_update_tree_safely(child, target)
+            preserved.append(f"{folder_name}/{target.name}")
+        return preserved
+
+    def _merge_updated_world_templates(self, old_root: Path, staged_root: Path) -> list[str]:
+        """Keep user templates that are not supplied by the new server release."""
+        old_dir = old_root / "world_templates"
+        if old_dir.is_symlink():
+            raise ValueError("The existing world_templates directory is a symbolic link; refusing to update unsafely.")
+        if not old_dir.is_dir():
+            return []
+        new_dir = staged_root / "world_templates"
+        if new_dir.is_symlink():
+            raise ValueError("The uploaded archive contains an unsafe world_templates directory.")
+        new_dir.mkdir(parents=True, exist_ok=True)
+        preserved: list[str] = []
+        for child in sorted(old_dir.iterdir(), key=lambda item: item.name.casefold()):
+            if child.is_symlink():
+                raise ValueError(f"Existing world template is a symbolic link: {child}")
+            target = new_dir / child.name
+            # New release templates take precedence for matching names; unmatched
+            # user templates are copied into the updated distribution.
+            if target.exists() or target.is_symlink():
+                continue
+            self._copy_update_tree_safely(child, target)
+            preserved.append(f"world_templates/{child.name}")
+        return preserved
+
+    def discard_server_update_ticket(self, token: str) -> dict[str, Any]:
+        lock, tickets = self._server_update_store()
+        with lock:
+            item = tickets.pop(token, None)
+            if item:
+                path = item.get("path")
+                if isinstance(path, Path):
+                    path.unlink(missing_ok=True)
+            return {"ok": True, "message": "Server update preview discarded."}
+
+    def _validate_preserved_server_data(self, root: Path) -> None:
+        for relative in SERVER_UPDATE_PRESERVE_FILES + SERVER_UPDATE_PRESERVE_DIRS + ("behavior_packs", "resource_packs"):
+            candidate = root / relative
+            if not candidate.exists() and not candidate.is_symlink():
+                continue
+            if candidate.is_symlink():
+                raise ValueError(f"Existing server data path is a symbolic link: {relative}. Remove or replace it before updating.")
+            if candidate.is_file():
+                if not stat.S_ISREG(candidate.lstat().st_mode):
+                    raise ValueError(f"Existing server configuration is not a regular file: {relative}")
+                continue
+            if not candidate.is_dir():
+                raise ValueError(f"Existing server data path is not a regular file or directory: {relative}")
+            for current, dirs, files in os.walk(candidate, topdown=True, followlinks=False):
+                current_path = Path(current)
+                for dirname in list(dirs):
+                    child = current_path / dirname
+                    mode = child.lstat().st_mode
+                    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                        raise ValueError(f"Preserved server data contains a symbolic link or special directory: {child.relative_to(root)}")
+                for filename in files:
+                    child = current_path / filename
+                    mode = child.lstat().st_mode
+                    if not stat.S_ISREG(mode):
+                        raise ValueError(f"Preserved server data contains a symbolic link or special file: {child.relative_to(root)}")
+
+    def apply_server_update(self, token: str, before_stop: Any = None) -> dict[str, Any]:
+        """Backup, stage, stop, and atomically replace BDS runtime files."""
+        lock, tickets = self._server_update_store()
+        with lock:
+            self._cleanup_server_update_tickets(tickets)
+            ticket = tickets.get(token)
+            if not ticket or not re.fullmatch(r"[A-Za-z0-9_-]{32,64}", token):
+                raise ValueError("Server update preview expired or was not found. Upload the ZIP again.")
+            raw_root = self.root.expanduser()
+            if raw_root.is_symlink():
+                raise ValueError("The configured BDS folder is a symbolic link. Choose its real directory in Manager Settings first.")
+            root = raw_root.resolve()
+            if str(root) != ticket.get("target_root"):
+                raise ValueError("The configured BDS folder changed after preview. Upload the ZIP again for the current server folder.")
+            if not root.is_dir() or not (root / "bedrock_server").is_file() or (root / "bedrock_server").is_symlink() or not (root / "server.properties").is_file() or (root / "server.properties").is_symlink():
+                raise ValueError("The current BDS installation is missing or unsafe. No files were changed.")
+
+            with self.process_lock:
+                managed_process = self.proc
+                was_running = bool(managed_process and managed_process.poll() is None)
+                if managed_process and not was_running and self.proc is managed_process:
+                    self.proc = None
+                    self.started_at = None
+                    with self.players_lock:
+                        self._players_tracking_active = False
+                        self.online_players.clear()
+            external = self._unmanaged_bds()
+            if external:
+                pids = ", ".join(str(item.get("pid", "?")) for item in external)
+                raise ValueError(f"A BDS process is running outside this manager (PID {pids}). Stop it through its existing launcher before updating.")
+
+            archive_path = ticket.get("path")
+            if not isinstance(archive_path, Path) or archive_path.is_symlink() or not archive_path.is_file():
+                raise ValueError("The staged update ZIP is missing. Upload it again.")
+            if archive_path.stat().st_size != int(ticket.get("size_bytes", -1)):
+                raise ValueError("The staged update ZIP changed after inspection. Upload it again.")
+
+            stage_parent: Path | None = None
+            rollback_path: Path | None = None
+            backup_result: dict[str, Any] | None = None
+            try:
+                # Reject unsafe preserved data before creating the backup or stopping BDS.
+                self._validate_preserved_server_data(root)
+                old_props = parse_properties((root / "server.properties").read_text(encoding="utf-8", errors="replace"))
+                active_world = old_props.get("level-name", "Bedrock level")
+                if not active_world or active_world in (".", "..") or "/" in active_world or "\\" in active_world:
+                    raise ValueError("The current server.properties contains an unsafe level-name. Correct it before updating.")
+                old_active_world = root / "worlds" / active_world
+                had_active_world = old_active_world.is_dir() and not old_active_world.is_symlink()
+
+                # Stage and CRC-check the uploaded server package before stopping the live server.
+                stage_parent = Path(tempfile.mkdtemp(prefix=f".{root.name}.bds-update-", dir=str(root.parent)))
+                staged_root = stage_parent / "new-server"
+                try:
+                    required_bytes = int(ticket.get("expanded_bytes", 0))
+                    free_bytes = shutil.disk_usage(root.parent).free
+                    if required_bytes > free_bytes - 128 * 1024 * 1024:
+                        raise ValueError("Not enough free disk space beside the BDS folder to stage this update. Free space and try again.")
+                except OSError as exc:
+                    raise ValueError(f"Could not check free disk space for staging: {exc}") from exc
+                with zipfile.ZipFile(archive_path, "r") as zf:
+                    entries = self._archive_entries(
+                        zf,
+                        max_entries=MAX_CONTENT_ARCHIVE_ENTRIES,
+                        max_bytes=MAX_CONTENT_EXTRACTED_BYTES,
+                    )
+                    prefix = self._root_prefix(entries, "bedrock_server")
+                    names = {str(path) for info, path in entries if not info.is_dir()}
+                    if f"{prefix}server.properties" not in names:
+                        raise ValueError("The uploaded ZIP is no longer a valid complete Linux BDS distribution.")
+                    bad_member = zf.testzip()
+                    if bad_member:
+                        raise ValueError(f"Server ZIP CRC verification failed at {bad_member}.")
+                    self._extract_entries(zf, entries, staged_root, prefix=prefix, max_bytes=MAX_CONTENT_EXTRACTED_BYTES)
+
+                new_executable = staged_root / "bedrock_server"
+                new_properties = staged_root / "server.properties"
+                for required in (new_executable, new_properties):
+                    try:
+                        required_mode = required.lstat().st_mode
+                    except OSError as exc:
+                        raise ValueError(f"Required BDS file is missing after extraction: {required.name}") from exc
+                    if not stat.S_ISREG(required_mode):
+                        raise ValueError(f"Required BDS file is not a regular file: {required.name}")
+                if new_executable.stat().st_size < 1024:
+                    raise ValueError("The extracted bedrock_server executable is unexpectedly small.")
+                new_executable.chmod(0o755)
+
+                # Full backup is deliberately created before stopping BDS.
+                backup_result = self.backup("full")
+                if not isinstance(backup_result, dict) or backup_result.get("ok") is not True:
+                    detail = backup_result.get("message", "The manager did not confirm a successful full backup.") if isinstance(backup_result, dict) else "The manager did not return a valid backup result."
+                    raise ValueError(f"The required full server backup did not complete: {detail} The server was not stopped or replaced.")
+                if before_stop is not None:
+                    before_stop()
+                if was_running:
+                    self.stop()
+                with self.process_lock:
+                    if self.proc and self.proc.poll() is None:
+                        raise ValueError("BDS did not stop. The update was not installed.")
+                external_after_stop = self._unmanaged_bds()
+                if external_after_stop:
+                    pids = ", ".join(str(item.get("pid", "?")) for item in external_after_stop)
+                    raise ValueError(f"Another BDS process appeared during the update (PID {pids}). The current installation was left untouched.")
+
+                preserved: list[str] = []
+                # User/server configuration and world data are copied after BDS stops.
+                for filename in SERVER_UPDATE_PRESERVE_FILES:
+                    source = root / filename
+                    if source.exists():
+                        self._copy_update_tree_safely(source, staged_root / filename)
+                        preserved.append(filename)
+                for dirname in SERVER_UPDATE_PRESERVE_DIRS:
+                    source = root / dirname
+                    if source.exists():
+                        if dirname == "world_templates":
+                            preserved.extend(self._merge_updated_world_templates(root, staged_root))
+                            continue
+                        destination = staged_root / dirname
+                        if destination.exists() or destination.is_symlink():
+                            self._remove_update_stage_path(destination)
+                        self._copy_update_tree_safely(source, destination)
+                        preserved.append(dirname + "/")
+                for folder_name in ("behavior_packs", "resource_packs"):
+                    preserved.extend(self._merge_updated_shared_packs(root, staged_root, folder_name))
+
+                if had_active_world and not (staged_root / "worlds" / active_world).is_dir():
+                    raise ValueError("The active world did not survive staging. The current server was not replaced.")
+
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                rollback_path = root.parent / f".{root.name}.bds-omni-rollback-{stamp}-{secrets.token_hex(4)}"
+                os.replace(root, rollback_path)
+                try:
+                    os.replace(staged_root, root)
+                except Exception:
+                    os.replace(rollback_path, root)
+                    rollback_path = None
+                    raise
+
+                # Post-swap checks are filesystem-only; never execute an uploaded binary.
+                if root.is_symlink() or not root.is_dir() or not (root / "bedrock_server").is_file() or not os.access(root / "bedrock_server", os.X_OK) or not (root / "server.properties").is_file():
+                    raise ValueError("Post-install verification failed. The previous server installation will be restored.")
+                if had_active_world and not (root / "worlds" / active_world).is_dir():
+                    raise ValueError("Post-install world verification failed. The previous server installation will be restored.")
+                installed_props = parse_properties((root / "server.properties").read_text(encoding="utf-8", errors="replace"))
+                if installed_props.get("level-name", "Bedrock level") != active_world:
+                    raise ValueError("Post-install server.properties verification failed. The previous installation will be restored.")
+
+                self._restore_cached_server_version()
+                self._append_log(f"[manager] BDS update installed from {ticket['filename']}. Previous installation retained at {rollback_path}.")
+                # Retain two complete rollback folders; do not delete the just-created one.
+                rollback_candidates = sorted(
+                    (item for item in root.parent.glob(f".{root.name}.bds-omni-rollback-*") if item.is_dir() and not item.is_symlink()),
+                    key=lambda item: item.stat().st_mtime,
+                    reverse=True,
+                )
+                for stale in rollback_candidates[2:]:
+                    try:
+                        shutil.rmtree(stale)
+                    except OSError as exc:
+                        self._append_log(f"[manager] Could not prune old BDS rollback folder {stale}: {exc}")
+                archive_path.unlink(missing_ok=True)
+                tickets.pop(token, None)
+                if stage_parent and stage_parent.exists():
+                    shutil.rmtree(stage_parent, ignore_errors=True)
+                return {
+                    "ok": True,
+                    "message": "BDS server files updated. Your existing server.properties, access files, worlds and installed add-ons were preserved. Start the server when you are ready.",
+                    "backup": backup_result.get("backup") if isinstance(backup_result, dict) else None,
+                    "rollback_folder": str(rollback_path) if rollback_path else "",
+                    "preserved": preserved,
+                    "server_dir": str(root),
+                    "server_stopped": True,
+                    "restart_required": True,
+                }
+            except Exception as exc:
+                rollback_error = ""
+                if rollback_path and rollback_path.exists():
+                    try:
+                        if root.exists() or root.is_symlink():
+                            failed_path = (stage_parent / "failed-new-install") if stage_parent else root.parent / f".{root.name}.bds-omni-failed-{secrets.token_hex(4)}"
+                            if failed_path.exists() or failed_path.is_symlink():
+                                self._remove_update_stage_path(failed_path)
+                            os.replace(root, failed_path)
+                        os.replace(rollback_path, root)
+                        rollback_path = None
+                        self._restore_cached_server_version()
+                        self._append_log("[manager] BDS update failed; previous installation restored.")
+                    except Exception as restore_exc:
+                        rollback_error = f" Automatic rollback also failed: {restore_exc}. Previous installation may remain at {rollback_path}."
+                if stage_parent and stage_parent.exists():
+                    shutil.rmtree(stage_parent, ignore_errors=True)
+                if isinstance(exc, ValueError):
+                    raise ValueError(str(exc) + rollback_error) from exc
+                raise ValueError(f"BDS update failed: {exc}.{rollback_error}") from exc
 
     def set_backup_settings(self, value: dict[str, Any]) -> dict[str, Any]:
         new_dir = Path(str(value.get("backup_dir", self.backup_dir))).expanduser().resolve()
@@ -5252,6 +5753,40 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             temp_path.unlink(missing_ok=True)
 
+    def _receive_server_update_upload(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("A valid Content-Length header is required for the BDS ZIP upload.") from exc
+        if length <= 0 or length > MAX_SERVER_UPDATE_UPLOAD_BYTES:
+            raise ValueError("BDS update ZIP must be between 1 byte and 4 GiB.")
+        filename = unquote(self.headers.get("X-Upload-Filename", "")).strip()
+        if not filename or filename in (".", "..") or Path(filename).name != filename or any(ord(char) < 32 for char in filename):
+            raise ValueError("Upload filename is missing or unsafe.")
+        if Path(filename).suffix.lower() != ".zip":
+            raise ValueError("Choose the Linux Bedrock Dedicated Server .zip archive.")
+        if STATE_DIR.is_symlink():
+            raise ValueError("The manager state directory is a symbolic link; upload storage is disabled for safety.")
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix="bds-omni-server-update-upload-", suffix=".zip", dir=STATE_DIR)
+        temp_path = Path(temp_name)
+        received = 0
+        try:
+            with os.fdopen(fd, "wb") as output:
+                while received < length:
+                    chunk = self.rfile.read(min(1024 * 1024, length - received))
+                    if not chunk:
+                        raise ValueError("Upload ended before all declared bytes were received.")
+                    received += len(chunk)
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if received != length:
+                raise ValueError("Upload length did not match Content-Length.")
+            return MANAGER.prepare_server_update_archive(temp_path, filename)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
     def _host_ok(self) -> bool:
         host = self.headers.get("Host", "")
         return host.startswith("127.0.0.1:") or host.startswith("localhost:")
@@ -5333,6 +5868,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, COMMAND_FORMS)
             elif parsed.path == "/api/backups":
                 self._send(200, MANAGER.list_backups())
+            elif parsed.path == "/api/server-update/state":
+                self._send(200, MANAGER.server_update_state())
             elif parsed.path == "/api/tunnel/state":
                 self._send(200, TUNNEL_MANAGER.state())
             elif parsed.path == "/api/tunnel/logs":
@@ -5353,6 +5890,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": "Forbidden"})
             return
         request_path = urlparse(self.path).path
+        if request_path == "/api/server-update/preview":
+            try:
+                result = self._receive_server_update_upload()
+                self._send(200, result)
+            except Exception as exc:
+                self._send(400, {"error": str(exc)})
+            return
         if request_path in ("/api/worlds/import", "/api/packs/import", "/api/mods/import"):
             try:
                 result = self._receive_content_upload(request_path)
@@ -5369,7 +5913,41 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError("Request body must be a JSON object.")
             path = urlparse(self.path).path
-            if path == "/api/worlds/export":
+            if path == "/api/server-update/discard":
+                result = MANAGER.discard_server_update_ticket(str(data.get("ticket", "")))
+            elif path == "/api/server-update/apply":
+                was_running = bool(MANAGER.proc and MANAGER.proc.poll() is None)
+                tunnel_was_active = False
+                try:
+                    tunnel_was_active = bool(TUNNEL_MANAGER.state().get("active"))
+                except Exception:
+                    tunnel_was_active = False
+                tunnel_stopped = False
+                def stop_linked_tunnel() -> None:
+                    nonlocal tunnel_stopped
+                    if MANAGER.tunnel_stop_with_bds and tunnel_was_active:
+                        TUNNEL_MANAGER.action("stop")
+                        tunnel_stopped = True
+                try:
+                    result = MANAGER.apply_server_update(str(data.get("ticket", "")), before_stop=stop_linked_tunnel)
+                except Exception as update_exc:
+                    recovery_notes: list[str] = []
+                    currently_running = bool(MANAGER.proc and MANAGER.proc.poll() is None)
+                    if was_running and not currently_running:
+                        try:
+                            MANAGER.start()
+                            recovery_notes.append("The previous BDS installation was restored and restarted.")
+                        except Exception as restart_exc:
+                            recovery_notes.append(f"The previous installation was restored but could not be restarted: {restart_exc}")
+                    if tunnel_stopped and tunnel_was_active:
+                        try:
+                            if not TUNNEL_MANAGER.state().get("active"):
+                                TUNNEL_MANAGER.action("start")
+                        except Exception as tunnel_exc:
+                            recovery_notes.append(f"The previous tunnel session could not be restarted: {tunnel_exc}")
+                    suffix = (" " + " ".join(recovery_notes)) if recovery_notes else ""
+                    raise ValueError(str(update_exc) + suffix) from update_exc
+            elif path == "/api/worlds/export":
                 export_path = MANAGER.export_world_archive(str(data.get("name", "")))
                 result = MANAGER.issue_download_ticket(export_path, export_path.name, "application/x-minecraft-world")
             elif path == "/api/packs/export":
